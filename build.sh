@@ -1,9 +1,6 @@
 #/bin/bash
 
-USERNAME=xiaolegun
-AARCH=aarch
-
-export PATH=$PATH:/home/$USERNAME/$AARCH/bin
+export PATH=$PATH:$PWD/gcc/bin
 export CROSS_COMPILE=aarch64-linux-android-
 export GCC_COLORS=AUTO
 export clang=false
