@@ -493,10 +493,9 @@ try_again:
 			ret = put_cmsg(msg, SOL_RXRPC, RXRPC_USER_CALL_ID,
 				       sizeof(unsigned int), &id32);
 		} else {
-			unsigned long idl = call->user_call_ID;
-
 			ret = put_cmsg(msg, SOL_RXRPC, RXRPC_USER_CALL_ID,
-				       sizeof(unsigned long), &idl);
+				       sizeof(unsigned long),
+				       &call->user_call_ID);
 		}
 		if (ret < 0)
 			goto error;

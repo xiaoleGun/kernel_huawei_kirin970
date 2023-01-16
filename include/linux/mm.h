@@ -284,6 +284,9 @@ extern pgprot_t protection_map[16];
 #define FAULT_FLAG_USER		0x40	/* The fault originated in userspace */
 #define FAULT_FLAG_REMOTE	0x80	/* faulting for non current tsk/mm */
 #define FAULT_FLAG_INSTRUCTION  0x100	/* The fault was during an instruction fetch */
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+#define FAULT_FLAG_SPECULATIVE	0x200	/* Speculative fault, not holding mmap_sem */
+#endif
 
 /*
  * vm_fault is filled by the the pagefault handler and passed to the vma's
@@ -341,6 +344,16 @@ struct fault_env {
 					 * page table to avoid allocation from
 					 * atomic context.
 					 */
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+        /*
+         * These entries are required when handling speculative page fault.
+         * This way the page handling is done using consistent field values.
+         */
+        unsigned long vma_flags;
+        pgprot_t vma_page_prot;
+	unsigned int sequence;
+	pmd_t orig_pmd;			/* value of PMD at the time of fault */
+#endif
 };
 
 /*
@@ -623,9 +636,17 @@ void free_compound_page(struct page *page);
  * pte_mkwrite.  But get_user_pages can cause write faults for mappings
  * that do not have writing enabled, when used by access_process_vm.
  */
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+static inline pte_t maybe_mkwrite(pte_t pte, unsigned long vma_flags)
+#else
 static inline pte_t maybe_mkwrite(pte_t pte, struct vm_area_struct *vma)
+#endif
 {
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	if (likely(vma_flags & VM_WRITE))
+#else
 	if (likely(vma->vm_flags & VM_WRITE))
+#endif
 		pte = pte_mkwrite(pte);
 	return pte;
 }
@@ -704,6 +725,9 @@ int alloc_set_pte(struct fault_env *fe, struct mem_cgroup *memcg,
 #define NODES_PGOFF		(SECTIONS_PGOFF - NODES_WIDTH)
 #define ZONES_PGOFF		(NODES_PGOFF - ZONES_WIDTH)
 #define LAST_CPUPID_PGOFF	(ZONES_PGOFF - LAST_CPUPID_WIDTH)
+#ifdef CONFIG_TASK_PROTECT_LRU
+#define PROTECT_LRU_PGOFF	(LAST_CPUPID_PGOFF - PROTECT_LRU_WIDTH)
+#endif
 
 /*
  * Define the bit shifts to access each section.  For non-existent
@@ -714,6 +738,9 @@ int alloc_set_pte(struct fault_env *fe, struct mem_cgroup *memcg,
 #define NODES_PGSHIFT		(NODES_PGOFF * (NODES_WIDTH != 0))
 #define ZONES_PGSHIFT		(ZONES_PGOFF * (ZONES_WIDTH != 0))
 #define LAST_CPUPID_PGSHIFT	(LAST_CPUPID_PGOFF * (LAST_CPUPID_WIDTH != 0))
+#ifdef CONFIG_TASK_PROTECT_LRU
+#define PROTECT_LRU_PGSHIFT	(PROTECT_LRU_PGOFF * (PROTECT_LRU_WIDTH != 0))
+#endif
 
 /* NODE:ZONE or SECTION:ZONE is used to ID a zone for the buddy allocator */
 #ifdef NODE_NOT_IN_PAGE_FLAGS
@@ -737,6 +764,9 @@ int alloc_set_pte(struct fault_env *fe, struct mem_cgroup *memcg,
 #define SECTIONS_MASK		((1UL << SECTIONS_WIDTH) - 1)
 #define LAST_CPUPID_MASK	((1UL << LAST_CPUPID_SHIFT) - 1)
 #define ZONEID_MASK		((1UL << ZONEID_SHIFT) - 1)
+#ifdef CONFIG_TASK_PROTECT_LRU
+#define PROTECT_LRU_MASK	((1UL << PROTECT_LRU_WIDTH) - 1)
+#endif
 
 static inline enum zone_type page_zonenum(const struct page *page)
 {
@@ -999,7 +1029,27 @@ static inline struct mem_cgroup *page_memcg_rcu(struct page *page)
 	return NULL;
 }
 #endif
+#ifdef CONFIG_TASK_PROTECT_LRU
+static inline int get_page_num(const struct page *page)
+{
+	return (page->flags >> PROTECT_LRU_PGSHIFT) & PROTECT_LRU_MASK;
+}
 
+static inline void set_page_num(struct page *page, int num)
+{
+	unsigned long old_flags, flags;
+
+	do {
+		/*
+		 * old_flags maybe use the same register of page->flags
+		 * by gcc, so cmpxchg maybe not help.
+		 */
+		old_flags = flags = ACCESS_ONCE(page->flags);
+		flags &= ~(PROTECT_LRU_MASK << PROTECT_LRU_PGSHIFT);
+		flags |= (num & PROTECT_LRU_MASK) << PROTECT_LRU_PGSHIFT;
+	} while (cmpxchg(&page->flags, old_flags, flags) != old_flags);
+}
+#endif
 /*
  * Some inline functions in vmstat.h depend on page_zone()
  */
@@ -1119,6 +1169,10 @@ static inline void clear_page_pfmemalloc(struct page *page)
 
 #define VM_FAULT_HWPOISON_LARGE_MASK 0xf000 /* encodes hpage index for large hwpoison */
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+#define VM_FAULT_PTNOTSAME 0x4000	/* Page table entries have changed */
+#endif
+
 #define VM_FAULT_ERROR	(VM_FAULT_OOM | VM_FAULT_SIGBUS | VM_FAULT_SIGSEGV | \
 			 VM_FAULT_HWPOISON | VM_FAULT_HWPOISON_LARGE | \
 			 VM_FAULT_FALLBACK)
@@ -1133,6 +1187,15 @@ static inline void clear_page_pfmemalloc(struct page *page)
 extern void pagefault_out_of_memory(void);
 
 #define offset_in_page(p)	((unsigned long)(p) & ~PAGE_MASK)
+
+#ifdef CONFIG_HUAWEI_SLAB_UNRECLAIMABLE_THRESHOLD
+/*
+ * Can be called by show_mem() to test if slab_unreclaimable exceeds
+ * the threshold and print slab_info when it exceeds.
+ */
+bool is_exceed_slab_unreclaimable_threshold(unsigned int flags);
+void print_all_slabinfo(void);
+#endif
 
 /*
  * Flags passed to show_mem() and show_free_areas() to suppress output in
@@ -1169,8 +1232,27 @@ struct zap_details {
 	bool check_swap_entries;		/* Check also swap entries */
 };
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+static inline void INIT_VMA(struct vm_area_struct *vma)
+{
+	INIT_LIST_HEAD(&vma->anon_vma_chain);
+	seqcount_init(&vma->vm_sequence);
+	atomic_set(&vma->vm_ref_count, 1);
+}
+#endif
+
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+struct page *_vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
+				pte_t pte, unsigned long vma_flags);
+static inline struct page *vm_normal_page(struct vm_area_struct *vma,
+					  unsigned long addr, pte_t pte)
+{
+	return _vm_normal_page(vma, addr, pte, vma->vm_flags);
+}
+#else
 struct page *vm_normal_page(struct vm_area_struct *vma, unsigned long addr,
 		pte_t pte);
+#endif
 struct page *vm_normal_page_pmd(struct vm_area_struct *vma, unsigned long addr,
 				pmd_t pmd);
 
@@ -1240,6 +1322,25 @@ static inline void unmap_shared_mapping_range(struct address_space *mapping,
 	unmap_mapping_range(mapping, holebegin, holelen, 0);
 }
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+static inline void vm_write_begin(struct vm_area_struct *vma)
+{
+	write_seqcount_begin(&vma->vm_sequence);
+}
+static inline void vm_write_end(struct vm_area_struct *vma)
+{
+	write_seqcount_end(&vma->vm_sequence);
+}
+static inline void vm_raw_write_begin(struct vm_area_struct *vma)
+{
+	raw_write_seqcount_begin(&vma->vm_sequence);
+}
+static inline void vm_raw_write_end(struct vm_area_struct *vma)
+{
+	raw_write_seqcount_end(&vma->vm_sequence);
+}
+#endif /* CONFIG_SPECULATIVE_PAGE_FAULT */
+
 extern void truncate_pagecache(struct inode *inode, loff_t new);
 extern void truncate_setsize(struct inode *inode, loff_t newsize);
 void pagecache_isize_extended(struct inode *inode, loff_t from, loff_t to);
@@ -1251,6 +1352,53 @@ int invalidate_inode_page(struct page *page);
 #ifdef CONFIG_MMU
 extern int handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 		unsigned int flags);
+
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+extern int sysctl_speculative_page_fault;
+extern int __handle_speculative_fault(struct mm_struct *mm,
+				      unsigned long address,
+				      unsigned int flags, struct vm_area_struct *vma);
+extern struct vm_area_struct *get_vma(struct mm_struct *mm,
+				      unsigned long addr);
+extern void put_vma(struct vm_area_struct *vma);
+
+static inline int handle_speculative_fault(struct mm_struct *mm,
+					   unsigned long address,
+					   unsigned int flags, unsigned long vm_flags)
+{
+	struct vm_area_struct *vma;
+	int seq, ret = VM_FAULT_RETRY;
+
+	if (unlikely(!sysctl_speculative_page_fault))
+		return ret;
+	/*
+	 * Try speculative page fault for multithreaded user space task only.
+	 */
+	if (!(flags & FAULT_FLAG_USER) || atomic_read(&mm->mm_users) == 1)
+		return ret;
+
+	vma = get_vma(mm, address);
+	if (!vma)
+		return ret;
+
+	seq = raw_read_seqcount(&vma->vm_sequence);
+	if (seq & 1)
+		goto out_put;
+
+	if (!vma->anon_vma)
+		goto out_put;
+
+	if (!(READ_ONCE(vma->vm_flags) & vm_flags))
+		goto out_put;
+
+	ret =  __handle_speculative_fault(mm, address, flags, vma);
+
+out_put:
+	put_vma(vma);
+	return ret;
+}
+#endif /* CONFIG_SPECULATIVE_PAGE_FAULT */
+
 extern int fixup_user_fault(struct task_struct *tsk, struct mm_struct *mm,
 			    unsigned long address, unsigned int fault_flags,
 			    bool *unlocked);
@@ -1786,6 +1934,12 @@ extern void free_highmem_page(struct page *page);
 extern void adjust_managed_page_count(struct page *page, long count);
 extern void mem_init_print_info(const char *str);
 
+#ifdef CONFIG_HISI_RESORT_ZONE_FREELIST
+extern void resort_zone_freelist(void);
+#else
+static inline void resort_zone_freelist(void) {}
+#endif
+
 extern void reserve_bootmem_region(phys_addr_t start, phys_addr_t end);
 
 /* Free the reserved page into the buddy system, so it gets managed. */
@@ -1956,18 +2110,45 @@ void anon_vma_interval_tree_verify(struct anon_vma_chain *node);
 
 /* mmap.c */
 extern int __vm_enough_memory(struct mm_struct *mm, long pages, int cap_sys_admin);
+
 extern int __vma_adjust(struct vm_area_struct *vma, unsigned long start,
 	unsigned long end, pgoff_t pgoff, struct vm_area_struct *insert,
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	struct vm_area_struct *expand, bool keep_locked);
+#else
 	struct vm_area_struct *expand);
+#endif
 static inline int vma_adjust(struct vm_area_struct *vma, unsigned long start,
 	unsigned long end, pgoff_t pgoff, struct vm_area_struct *insert)
 {
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	return __vma_adjust(vma, start, end, pgoff, insert, NULL, false);
+#else
 	return __vma_adjust(vma, start, end, pgoff, insert, NULL);
+#endif
 }
-extern struct vm_area_struct *vma_merge(struct mm_struct *,
+
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+extern struct vm_area_struct *__vma_merge(struct mm_struct *mm,
 	struct vm_area_struct *prev, unsigned long addr, unsigned long end,
-	unsigned long vm_flags, struct anon_vma *, struct file *, pgoff_t,
-	struct mempolicy *, struct vm_userfaultfd_ctx, const char __user *);
+	unsigned long vm_flags, struct anon_vma *anon, struct file *file,
+	pgoff_t pgoff, struct mempolicy *mpol,
+	struct vm_userfaultfd_ctx uff, const char __user *anon_name, bool keep_locked);
+
+static inline struct vm_area_struct *vma_merge(struct mm_struct *mm,
+	struct vm_area_struct *prev, unsigned long addr, unsigned long end,
+	unsigned long vm_flags, struct anon_vma *anon, struct file *file,
+	pgoff_t off, struct mempolicy *pol, struct vm_userfaultfd_ctx uff, const char __user *anon_name)
+{
+	return __vma_merge(mm, prev, addr, end, vm_flags, anon, file, off,
+			   pol, uff, anon_name, false);
+}
+#else
+extern struct vm_area_struct *vma_merge(struct mm_struct *,
+        struct vm_area_struct *prev, unsigned long addr, unsigned long end,
+        unsigned long vm_flags, struct anon_vma *, struct file *, pgoff_t,
+        struct mempolicy *, struct vm_userfaultfd_ctx, const char __user *);
+#endif
 extern struct anon_vma *find_mergeable_anon_vma(struct vm_area_struct *);
 extern int split_vma(struct mm_struct *,
 	struct vm_area_struct *, unsigned long addr, int new_below);
@@ -2253,13 +2434,15 @@ static inline struct page *follow_page(struct vm_area_struct *vma,
 #define FOLL_MLOCK	0x1000	/* lock present pages */
 #define FOLL_REMOTE	0x2000	/* we are working on non-current tsk/mm */
 #define FOLL_COW	0x4000	/* internal GUP flag */
-#define FOLL_ANON	0x8000	/* don't do file mappings */
+#define FOLL_ANON       0x8000  /* don't do file mappings */
 
 typedef int (*pte_fn_t)(pte_t *pte, pgtable_t token, unsigned long addr,
 			void *data);
 extern int apply_to_page_range(struct mm_struct *mm, unsigned long address,
 			       unsigned long size, pte_fn_t fn, void *data);
 
+extern void change_secpage_range(phys_addr_t phys, unsigned long addr,
+		      unsigned long size, pgprot_t prot);
 
 #ifdef CONFIG_PAGE_POISONING
 extern bool page_poisoning_enabled(void);
@@ -2471,6 +2654,36 @@ static inline bool page_is_guard(struct page *page) { return false; }
 void __init setup_nr_node_ids(void);
 #else
 static inline void setup_nr_node_ids(void) {}
+#endif
+
+#ifdef CONFIG_PROCESS_RECLAIM
+enum reclaim_type {
+        RECLAIM_FILE,
+        RECLAIM_ANON,
+        RECLAIM_ALL,
+        RECLAIM_RANGE,
+        RECLAIM_SOFT,
+        RECLAIM_INACTIVE,
+        RECLAIM_SWAPIN,
+};
+
+struct reclaim_param {
+	struct vm_area_struct *vma;
+	/* Number of pages scanned */
+	int nr_scanned;
+	/* max pages to reclaim */
+	int nr_to_reclaim;
+	/* pages reclaimed */
+	int nr_reclaimed;
+#ifdef CONFIG_HISI_SWAP_ZDATA
+	unsigned nr_writedblock;
+	bool hiber;	
+#endif
+	enum reclaim_type type;
+	bool inactive_lru;
+};
+extern struct reclaim_param reclaim_task_anon(struct task_struct *task,
+		int nr_to_reclaim);
 #endif
 
 #endif /* __KERNEL__ */

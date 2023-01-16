@@ -9,6 +9,9 @@
 #define DECLARE_BITMAP(name,bits) \
 	unsigned long name[BITS_TO_LONGS(bits)]
 
+#define DECLARE_BITMAP_ARRAY(name,nr,bits) \
+	unsigned long name[nr][BITS_TO_LONGS(bits)]
+
 typedef __u32 __kernel_dev_t;
 
 typedef __kernel_fd_set		fd_set;
@@ -199,6 +202,14 @@ struct ustat {
 	char			f_fname[6];
 	char			f_fpack[6];
 };
+
+#ifdef CONFIG_HW_QOS_THREAD
+struct transact_qos {
+	atomic_t *qos;
+	pid_t trans_from;
+	unsigned int trans_type;
+};
+#endif
 
 /**
  * struct callback_head - callback structure for use with RCU and task_work

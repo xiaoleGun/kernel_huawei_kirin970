@@ -581,6 +581,84 @@ static struct kobject *brd_probe(dev_t dev, int *part, void *data)
 	return kobj;
 }
 
+#ifdef CONFIG_HUAWEI_DYNAMIC_BRD
+static int brd_get_avail_id(void)
+{
+	struct brd_device *brd = NULL;
+	int minor_limit = 1UL << MINORBITS;
+	unsigned int occupied;
+	int i;
+
+	for (i = 0; i < minor_limit; ++i) {
+		occupied = 0;
+
+		list_for_each_entry(brd, &brd_devices, brd_list) {
+			if (i == brd->brd_number) {
+				occupied = 1;
+				break;
+			}
+		}
+
+		if (occupied == 0)
+			return i;
+	}
+
+	return -1;
+}
+
+int brd_create(unsigned int size)
+{
+	struct brd_device *brd = NULL;
+	int id;
+
+	mutex_lock(&brd_devices_mutex);
+
+	id = brd_get_avail_id();
+	if (id == (1UL << MINORBITS)) {
+		mutex_unlock(&brd_devices_mutex);
+		return -1;
+	}
+
+	brd = brd_alloc(id);
+	if (!brd) {
+		mutex_unlock(&brd_devices_mutex);
+		return -1;
+	}
+
+	set_capacity(brd->brd_disk, size * 2);
+
+	list_add_tail(&brd->brd_list, &brd_devices);
+	add_disk(brd->brd_disk);
+
+	mutex_unlock(&brd_devices_mutex);
+
+	return brd->brd_number;
+}
+
+int brd_delete(int nr)
+{
+	struct brd_device *brd = NULL;
+	struct brd_device *next = NULL;
+
+	if (nr < rd_nr)
+		return -1;
+
+	mutex_lock(&brd_devices_mutex);
+
+	list_for_each_entry_safe(brd, next, &brd_devices, brd_list) {
+		if (nr == brd->brd_number) {
+			brd_del_one(brd);
+			mutex_unlock(&brd_devices_mutex);
+			return 0;
+		}
+	}
+
+	mutex_unlock(&brd_devices_mutex);
+
+	return -EINVAL;
+}
+#endif
+
 static int __init brd_init(void)
 {
 	struct brd_device *brd, *next;

@@ -249,8 +249,6 @@ static struct class uio_class = {
 	.dev_groups = uio_groups,
 };
 
-bool uio_class_registered;
-
 /*
  * device functions
  */
@@ -281,7 +279,7 @@ static int uio_dev_add_attributes(struct uio_device *idev)
 		map = kzalloc(sizeof(*map), GFP_KERNEL);
 		if (!map) {
 			ret = -ENOMEM;
-			goto err_map;
+			goto err_map_kobj;
 		}
 		kobject_init(&map->kobj, &map_attr_type);
 		map->mem = mem;
@@ -291,7 +289,7 @@ static int uio_dev_add_attributes(struct uio_device *idev)
 			goto err_map_kobj;
 		ret = kobject_uevent(&map->kobj, KOBJ_ADD);
 		if (ret)
-			goto err_map_kobj;
+			goto err_map;
 	}
 
 	for (pi = 0; pi < MAX_UIO_PORT_REGIONS; pi++) {
@@ -310,7 +308,7 @@ static int uio_dev_add_attributes(struct uio_device *idev)
 		portio = kzalloc(sizeof(*portio), GFP_KERNEL);
 		if (!portio) {
 			ret = -ENOMEM;
-			goto err_portio;
+			goto err_portio_kobj;
 		}
 		kobject_init(&portio->kobj, &portio_attr_type);
 		portio->port = port;
@@ -321,7 +319,7 @@ static int uio_dev_add_attributes(struct uio_device *idev)
 			goto err_portio_kobj;
 		ret = kobject_uevent(&portio->kobj, KOBJ_ADD);
 		if (ret)
-			goto err_portio_kobj;
+			goto err_portio;
 	}
 
 	return 0;
@@ -782,9 +780,6 @@ static int init_uio_class(void)
 		printk(KERN_ERR "class_register failed for uio\n");
 		goto err_class_register;
 	}
-
-	uio_class_registered = true;
-
 	return 0;
 
 err_class_register:
@@ -795,7 +790,6 @@ exit:
 
 static void release_uio_class(void)
 {
-	uio_class_registered = false;
 	class_unregister(&uio_class);
 	uio_major_cleanup();
 }
@@ -814,9 +808,6 @@ int __uio_register_device(struct module *owner,
 {
 	struct uio_device *idev;
 	int ret = 0;
-
-	if (!uio_class_registered)
-		return -EPROBE_DEFER;
 
 	if (!parent || !info || !info->name || !info->version)
 		return -EINVAL;
@@ -863,10 +854,8 @@ int __uio_register_device(struct module *owner,
 		 */
 		ret = request_irq(info->irq, uio_interrupt,
 				  info->irq_flags, info->name, idev);
-		if (ret) {
-			info->uio_dev = NULL;
+		if (ret)
 			goto err_request_irq;
-		}
 	}
 
 	return 0;

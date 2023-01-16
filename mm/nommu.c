@@ -1242,8 +1242,11 @@ unsigned long do_mmap(struct file *file,
 	region->vm_usage = 1;
 	region->vm_flags = vm_flags;
 	region->vm_pgoff = pgoff;
-
-	INIT_LIST_HEAD(&vma->anon_vma_chain);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	INIT_VMA(vma);
+#else
+	INIT_LIST_HEAD(&vma->anon_vma_chain);	
+#endif
 	vma->vm_flags = vm_flags;
 	vma->vm_pgoff = pgoff;
 

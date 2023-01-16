@@ -90,3 +90,12 @@ config DEBUG_PAGE_REF
 	  careful when enabling this feature because it adds about 30 KB to the
 	  kernel code.  However the runtime performance overhead is virtually
 	  nil until the tracepoints are actually enabled.
+
+config DEBUG_HISI_EARLY_RODATA_PROTECTION
+	bool "Enable testing of the early protection of const data"
+	default n
+	---help---
+	  This feature will attempt to modify a const value, in a way that would
+	  succeed, if it was not for the HKIP protection.
+	  To confirm this, also a control variable (unprotected) is
+	  modified, to prove that the protection works.

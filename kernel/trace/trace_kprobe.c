@@ -359,10 +359,11 @@ static struct trace_kprobe *find_trace_kprobe(const char *event,
 static int
 enable_trace_kprobe(struct trace_kprobe *tk, struct trace_event_file *file)
 {
-	struct event_file_link *link = NULL;
 	int ret = 0;
 
 	if (file) {
+		struct event_file_link *link;
+
 		link = kmalloc(sizeof(*link), GFP_KERNEL);
 		if (!link) {
 			ret = -ENOMEM;
@@ -381,18 +382,6 @@ enable_trace_kprobe(struct trace_kprobe *tk, struct trace_event_file *file)
 			ret = enable_kretprobe(&tk->rp);
 		else
 			ret = enable_kprobe(&tk->rp.kp);
-	}
-
-	if (ret) {
-		if (file) {
-			/* Notice the if is true on not WARN() */
-			if (!WARN_ON_ONCE(!link))
-				list_del_rcu(&link->list);
-			kfree(link);
-			tk->tp.flags &= ~TP_FLAG_TRACE;
-		} else {
-			tk->tp.flags &= ~TP_FLAG_PROFILE;
-		}
 	}
  out:
 	return ret;
@@ -618,7 +607,7 @@ static int create_trace_kprobe(int argc, char **argv)
 	bool is_return = false, is_delete = false;
 	char *symbol = NULL, *event = NULL, *group = NULL;
 	char *arg;
-	long offset = 0;
+	unsigned long offset = 0;
 	void *addr = NULL;
 	char buf[MAX_EVENT_NAME_LEN];
 
@@ -686,7 +675,7 @@ static int create_trace_kprobe(int argc, char **argv)
 		symbol = argv[1];
 		/* TODO: support .init module functions */
 		ret = traceprobe_split_symbol_offset(symbol, &offset);
-		if (ret || offset < 0 || offset > UINT_MAX) {
+		if (ret) {
 			pr_info("Failed to parse either an address or a symbol.\n");
 			return ret;
 		}

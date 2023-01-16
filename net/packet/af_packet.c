@@ -1489,6 +1489,12 @@ static int packet_rcv_fanout(struct sk_buff *skb, struct net_device *dev,
 		idx = fanout_demux_rollover(f, skb, idx, true, num);
 
 	po = pkt_sk(f->arr[idx]);
+
+	if (NULL == po->prot_hook.func) {
+		pr_err("packet_rcv_fanout prot_hook.func null.");
+		kfree_skb(skb);
+		return 0;
+	}
 	return po->prot_hook.func(skb, dev, &po->prot_hook, orig_dev);
 }
 

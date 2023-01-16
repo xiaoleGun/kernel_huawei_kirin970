@@ -489,7 +489,6 @@ again:
 		pages = kcalloc(nr_pages, sizeof(struct page *), GFP_NOFS);
 		if (!pages) {
 			/* just bail out to the uncompressed code */
-			nr_pages = 0;
 			goto cont;
 		}
 
@@ -568,10 +567,8 @@ cont:
 						     PAGE_SET_WRITEBACK |
 						     page_error_op |
 						     PAGE_END_WRITEBACK);
-			if (ret == 0)
-				btrfs_free_reserved_data_space_noquota(inode,
-							       start,
-							       end - start + 1);
+			btrfs_free_reserved_data_space_noquota(inode, start,
+						end - start + 1);
 			goto free_pages_out;
 		}
 	}
@@ -1231,8 +1228,6 @@ static noinline int csum_exist_in_range(struct btrfs_root *root,
 		list_del(&sums->list);
 		kfree(sums);
 	}
-	if (ret < 0)
-		return ret;
 	return 1;
 }
 
@@ -1325,11 +1320,8 @@ next_slot:
 		leaf = path->nodes[0];
 		if (path->slots[0] >= btrfs_header_nritems(leaf)) {
 			ret = btrfs_next_leaf(root, path);
-			if (ret < 0) {
-				if (cow_start != (u64)-1)
-					cur_offset = cow_start;
+			if (ret < 0)
 				goto error;
-			}
 			if (ret > 0)
 				break;
 			leaf = path->nodes[0];
@@ -1384,23 +1376,10 @@ next_slot:
 				goto out_check;
 			if (btrfs_extent_readonly(root, disk_bytenr))
 				goto out_check;
-			ret = btrfs_cross_ref_exist(trans, root, ino,
+			if (btrfs_cross_ref_exist(trans, root, ino,
 						  found_key.offset -
-						  extent_offset, disk_bytenr);
-			if (ret) {
-				/*
-				 * ret could be -EIO if the above fails to read
-				 * metadata.
-				 */
-				if (ret < 0) {
-					if (cow_start != (u64)-1)
-						cur_offset = cow_start;
-					goto error;
-				}
-
-				WARN_ON_ONCE(nolock);
+						  extent_offset, disk_bytenr))
 				goto out_check;
-			}
 			disk_bytenr += extent_offset;
 			disk_bytenr += cur_offset - found_key.offset;
 			num_bytes = min(end + 1, extent_end) - cur_offset;
@@ -1418,20 +1397,8 @@ next_slot:
 			 * this ensure that csum for a given extent are
 			 * either valid or do not exist.
 			 */
-			ret = csum_exist_in_range(root, disk_bytenr, num_bytes);
-			if (ret) {
-				/*
-				 * ret could be -EIO if the above fails to read
-				 * metadata.
-				 */
-				if (ret < 0) {
-					if (cow_start != (u64)-1)
-						cur_offset = cow_start;
-					goto error;
-				}
-				WARN_ON_ONCE(nolock);
+			if (csum_exist_in_range(root, disk_bytenr, num_bytes))
 				goto out_check;
-			}
 			if (!btrfs_inc_nocow_writers(root->fs_info,
 						     disk_bytenr))
 				goto out_check;
@@ -1548,11 +1515,12 @@ out_check:
 	}
 	btrfs_release_path(path);
 
-	if (cur_offset <= end && cow_start == (u64)-1)
+	if (cur_offset <= end && cow_start == (u64)-1) {
 		cow_start = cur_offset;
+		cur_offset = end;
+	}
 
 	if (cow_start != (u64)-1) {
-		cur_offset = end;
 		ret = cow_file_range(inode, locked_page, cow_start, end, end,
 				     page_started, nr_written, 1, NULL);
 		if (ret)
@@ -2095,15 +2063,8 @@ again:
 		goto out;
 	 }
 
-	ret = btrfs_set_extent_delalloc(inode, page_start, page_end,
-					&cached_state, 0);
-	if (ret) {
-		mapping_set_error(page->mapping, ret);
-		end_extent_writepage(page, ret, page_start, page_end);
-		ClearPageChecked(page);
-		goto out;
-	}
-
+	btrfs_set_extent_delalloc(inode, page_start, page_end, &cached_state,
+				  0);
 	ClearPageChecked(page);
 	set_page_dirty(page);
 out:
@@ -2966,7 +2927,7 @@ static int btrfs_finish_ordered_io(struct btrfs_ordered_extent *ordered_extent)
 
 	ret = test_range_bit(io_tree, ordered_extent->file_offset,
 			ordered_extent->file_offset + ordered_extent->len - 1,
-			EXTENT_DEFRAG, 0, cached_state);
+			EXTENT_DEFRAG, 1, cached_state);
 	if (ret) {
 		u64 last_snapshot = btrfs_root_last_snapshot(&root->root_item);
 		if (0 && last_snapshot >= BTRFS_I(inode)->generation)
@@ -5258,7 +5219,7 @@ void btrfs_evict_inode(struct inode *inode)
 	trace_btrfs_inode_evict(inode);
 
 	if (!root) {
-		clear_inode(inode);
+		kmem_cache_free(btrfs_inode_cachep, BTRFS_I(inode));
 		return;
 	}
 
@@ -9588,7 +9549,6 @@ static int btrfs_rename_exchange(struct inode *old_dir,
 	u64 new_idx = 0;
 	u64 root_objectid;
 	int ret;
-	int ret2;
 	bool root_log_pinned = false;
 	bool dest_log_pinned = false;
 
@@ -9779,8 +9739,7 @@ out_fail:
 			dest_log_pinned = false;
 		}
 	}
-	ret2 = btrfs_end_transaction(trans, root);
-	ret = ret ? ret : ret2;
+	ret = btrfs_end_transaction(trans, root);
 out_notrans:
 	if (new_ino == BTRFS_FIRST_FREE_OBJECTID)
 		up_read(&dest->fs_info->subvol_sem);

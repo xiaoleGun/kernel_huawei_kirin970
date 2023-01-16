@@ -216,12 +216,7 @@ find_appropriate_src(struct net *net,
 	return 0;
 }
 
-/* For [FUTURE] fragmentation handling, we want the least-used
- * src-ip/dst-ip/proto triple.  Fairness doesn't come into it.  Thus
- * if the range specifies 1.2.3.4 ports 10000-10005 and 1.2.3.5 ports
- * 1-65535, we don't do pro-rata allocation based on ports; we choose
- * the ip with the lowest src-ip/dst-ip/proto usage.
- */
+
 static void
 find_best_ips_proto(const struct nf_conntrack_zone *zone,
 		    struct nf_conntrack_tuple *tuple,
@@ -421,7 +416,7 @@ nf_nat_setup_info(struct nf_conn *ct,
 		else
 			ct->status |= IPS_DST_NAT;
 
-		if (nfct_help(ct) && !nfct_seqadj(ct))
+		if (nfct_help(ct))
 			if (!nfct_seqadj_ext_add(ct))
 				return NF_DROP;
 	}

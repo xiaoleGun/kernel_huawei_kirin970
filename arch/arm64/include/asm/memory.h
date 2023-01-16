@@ -98,7 +98,20 @@
 	__x & BIT(VA_BITS - 1) ? (__x & ~PAGE_OFFSET) + PHYS_OFFSET :	\
 				 (__x - kimage_voffset); })
 
+#if defined(__ASSEMBLER__) || !defined(CONFIG_HISI_LB_DEBUG)
 #define __phys_to_virt(x)	((unsigned long)((x) - PHYS_OFFSET) | PAGE_OFFSET)
+#else
+
+#if defined(CONFIG_HISI_LB_DEBUG)
+extern void __lb_assert_phys(phys_addr_t phys);
+#define lb_assert_phys __lb_assert_phys
+#endif
+
+#define __phys_to_virt(x) ({\
+	lb_assert_phys(x); \
+	((unsigned long)((x) - PHYS_OFFSET) | PAGE_OFFSET); \
+	})
+#endif
 #define __phys_to_kimg(x)	((unsigned long)((x) + kimage_voffset))
 
 /*
@@ -143,6 +156,7 @@
 #include <linux/mmdebug.h>
 
 extern s64			memstart_addr;
+extern s64			phystart_addr;
 /* PHYS_OFFSET - the physical address of the start of memory. */
 #define PHYS_OFFSET		({ VM_BUG_ON(memstart_addr & 1); memstart_addr; })
 
@@ -171,7 +185,7 @@ static inline unsigned long kaslr_offset(void)
  * direct-mapped view.  We assume this is the first page
  * of RAM in the mem_map as well.
  */
-#define PHYS_PFN_OFFSET	(PHYS_OFFSET >> PAGE_SHIFT)
+#define PHYS_PFN_OFFSET	(phystart_addr >> PAGE_SHIFT)
 
 /*
  * Note: Drivers should NOT use these.  They are the wrong

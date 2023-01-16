@@ -294,7 +294,9 @@ static const char * const fw_path[] = {
 	"/lib/firmware/updates/" UTS_RELEASE,
 	"/lib/firmware/updates",
 	"/lib/firmware/" UTS_RELEASE,
-	"/lib/firmware"
+	"/lib/firmware",
+	"/system/vendor/firmware",
+	"/system/vendor/firmware/ivp"
 };
 
 /*
@@ -491,9 +493,6 @@ static void fw_load_abort(struct firmware_priv *fw_priv)
 	struct firmware_buf *buf = fw_priv->buf;
 
 	__fw_load_abort(buf);
-
-	/* avoid user action after loading abort */
-	fw_priv->buf = NULL;
 }
 
 #define is_fw_load_aborted(buf)	\
@@ -647,7 +646,7 @@ static ssize_t firmware_loading_store(struct device *dev,
 
 	mutex_lock(&fw_lock);
 	fw_buf = fw_priv->buf;
-	if (!fw_buf)
+	if (is_fw_load_aborted(fw_buf))
 		goto out;
 
 	switch (loading) {

@@ -283,11 +283,11 @@ static int iscsi_check_tmf_restrictions(struct iscsi_task *task, int opcode)
 		 */
 		if (opcode != ISCSI_OP_SCSI_DATA_OUT) {
 			iscsi_conn_printk(KERN_INFO, conn,
-					  "task [op %x itt "
+					  "task [op %x/%x itt "
 					  "0x%x/0x%x] "
 					  "rejected.\n",
-					  opcode, task->itt,
-					  task->hdr_itt);
+					  task->hdr->opcode, opcode,
+					  task->itt, task->hdr_itt);
 			return -EACCES;
 		}
 		/*
@@ -296,10 +296,10 @@ static int iscsi_check_tmf_restrictions(struct iscsi_task *task, int opcode)
 		 */
 		if (conn->session->fast_abort) {
 			iscsi_conn_printk(KERN_INFO, conn,
-					  "task [op %x itt "
+					  "task [op %x/%x itt "
 					  "0x%x/0x%x] fast abort.\n",
-					  opcode, task->itt,
-					  task->hdr_itt);
+					  task->hdr->opcode, opcode,
+					  task->itt, task->hdr_itt);
 			return -EACCES;
 		}
 		break;
@@ -1695,15 +1695,6 @@ int iscsi_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *sc)
 		 */
 		switch (session->state) {
 		case ISCSI_STATE_FAILED:
-			/*
-			 * cmds should fail during shutdown, if the session
-			 * state is bad, allowing completion to happen
-			 */
-			if (unlikely(system_state != SYSTEM_RUNNING)) {
-				reason = FAILURE_SESSION_FAILED;
-				sc->result = DID_NO_CONNECT << 16;
-				break;
-			}
 		case ISCSI_STATE_IN_RECOVERY:
 			reason = FAILURE_SESSION_IN_RECOVERY;
 			sc->result = DID_IMM_RETRY << 16;
@@ -1736,7 +1727,7 @@ int iscsi_queuecommand(struct Scsi_Host *host, struct scsi_cmnd *sc)
 
 	if (test_bit(ISCSI_SUSPEND_BIT, &conn->suspend_tx)) {
 		reason = FAILURE_SESSION_IN_RECOVERY;
-		sc->result = DID_REQUEUE << 16;
+		sc->result = DID_REQUEUE;
 		goto fault;
 	}
 
@@ -1989,19 +1980,6 @@ static enum blk_eh_timer_return iscsi_eh_cmd_timed_out(struct scsi_cmnd *sc)
 
 	if (session->state != ISCSI_STATE_LOGGED_IN) {
 		/*
-		 * During shutdown, if session is prematurely disconnected,
-		 * recovery won't happen and there will be hung cmds. Not
-		 * handling cmds would trigger EH, also bad in this case.
-		 * Instead, handle cmd, allow completion to happen and let
-		 * upper layer to deal with the result.
-		 */
-		if (unlikely(system_state != SYSTEM_RUNNING)) {
-			sc->result = DID_NO_CONNECT << 16;
-			ISCSI_DBG_EH(session, "sc on shutdown, handled\n");
-			rc = BLK_EH_HANDLED;
-			goto done;
-		}
-		/*
 		 * We are probably in the middle of iscsi recovery so let
 		 * that complete and handle the error.
 		 */
@@ -2105,7 +2083,7 @@ done:
 		task->last_timeout = jiffies;
 	spin_unlock(&session->frwd_lock);
 	ISCSI_DBG_EH(session, "return %s\n", rc == BLK_EH_RESET_TIMER ?
-		     "timer reset" : "shutdown or nh");
+		     "timer reset" : "nh");
 	return rc;
 }
 
@@ -2414,8 +2392,8 @@ int iscsi_eh_session_reset(struct scsi_cmnd *sc)
 failed:
 		ISCSI_DBG_EH(session,
 			     "failing session reset: Could not log back into "
-			     "%s [age %d]\n", session->targetname,
-			     session->age);
+			     "%s, %s [age %d]\n", session->targetname,
+			     conn->persistent_address, session->age);
 		spin_unlock_bh(&session->frwd_lock);
 		mutex_unlock(&session->eh_mutex);
 		return FAILED;

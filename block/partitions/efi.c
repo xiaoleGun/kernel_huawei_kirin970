@@ -694,6 +694,7 @@ int efi_partition(struct parsed_partitions *state)
 	gpt_header *gpt = NULL;
 	gpt_entry *ptes = NULL;
 	u32 i;
+	u32 d;
 	unsigned ssz = bdev_logical_block_size(state->bdev) / 512;
 
 	if (!find_valid_gpt(state, &gpt, &ptes) || !gpt || !ptes) {
@@ -711,6 +712,16 @@ int efi_partition(struct parsed_partitions *state)
 		u64 start = le64_to_cpu(ptes[i].starting_lba);
 		u64 size = le64_to_cpu(ptes[i].ending_lba) -
 			   le64_to_cpu(ptes[i].starting_lba) + 1ULL;
+
+		for(d = 0 ; d < ((72 / sizeof (efi_char16_t)) - 2) ; d++) {
+			if((0x5f == ptes[i].partition_name[d])
+				&& (0x61 == ptes[i].partition_name[d + 1])
+				&& (0x0 == ptes[i].partition_name[d + 2])) {
+				ptes[i].partition_name[d] = 0x0;
+				ptes[i].partition_name[d + 1] = 0x0;
+				break;
+			}
+		}
 
 		if (!is_pte_valid(&ptes[i], last_lba(state->bdev)))
 			continue;

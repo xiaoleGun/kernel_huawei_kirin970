@@ -67,6 +67,11 @@
 
 #include <trace/events/sched.h>
 
+#ifdef CONFIG_HWAA
+#include <huawei_platform/hwaa/hwaa_proc_hooks.h>
+#endif
+
+
 int suid_dumpable = 0;
 
 static LIST_HEAD(formats);
@@ -306,7 +311,11 @@ static int __bprm_mm_init(struct linux_binprm *bprm)
 	vma->vm_start = vma->vm_end - PAGE_SIZE;
 	vma->vm_flags = VM_SOFTDIRTY | VM_STACK_FLAGS | VM_STACK_INCOMPLETE_SETUP;
 	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	INIT_VMA(vma);
+#else
 	INIT_LIST_HEAD(&vma->anon_vma_chain);
+#endif
 
 	err = insert_vm_struct(mm, vma);
 	if (err)
@@ -938,7 +947,7 @@ int kernel_read_file(struct file *file, void **buf, loff_t *size,
 				    i_size - pos);
 		if (bytes < 0) {
 			ret = bytes;
-			goto out;
+			goto out_free;
 		}
 
 		if (bytes == 0)
@@ -1228,14 +1237,15 @@ killed:
 	return -EAGAIN;
 }
 
-char *__get_task_comm(char *buf, size_t buf_size, struct task_struct *tsk)
+char *get_task_comm(char *buf, struct task_struct *tsk)
 {
+	/* buf must be at least sizeof(tsk->comm) in size */
 	task_lock(tsk);
-	strncpy(buf, tsk->comm, buf_size);
+	strncpy(buf, tsk->comm, sizeof(tsk->comm));
 	task_unlock(tsk);
 	return buf;
 }
-EXPORT_SYMBOL_GPL(__get_task_comm);
+EXPORT_SYMBOL_GPL(get_task_comm);
 
 /*
  * These functions flushes out all traces of the currently running executable
@@ -1826,7 +1836,21 @@ int do_execve(struct filename *filename,
 {
 	struct user_arg_ptr argv = { .ptr.native = __argv };
 	struct user_arg_ptr envp = { .ptr.native = __envp };
+
+#ifdef CONFIG_HWAA
+	int pre_execve_ret = 0;
+	int execve_ret = 0;
+	if (IS_ERR(filename))
+		return PTR_ERR(filename);
+	pre_execve_ret = hwaa_proc_pre_execve(filename->name);
+	execve_ret = do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+	if (!pre_execve_ret && !execve_ret) {
+		hwaa_proc_post_execve(current->tgid);
+	}
+	return execve_ret;
+#else
 	return do_execveat_common(AT_FDCWD, filename, argv, envp, 0);
+#endif
 }
 
 int do_execveat(int fd, struct filename *filename,

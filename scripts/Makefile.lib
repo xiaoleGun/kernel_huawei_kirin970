@@ -274,6 +274,14 @@ quiet_cmd_gzip = GZIP    $@
 cmd_gzip = (cat $(filter-out FORCE,$^) | gzip -n -f -9 > $@) || \
 	(rm -f $@ ; false)
 
+# MiniGzip
+# ---------------------------------------------------------------------------
+
+quiet_cmd_minigzip = MINIGZIP    $@
+cmd_minigzip = (cat $(filter-out FORCE,$^) | minigzip > $@) > /dev/null 2>&1 || \
+	(cat $(filter-out FORCE,$^) | gzip -n -f -9 > $@) || \
+	(rm -f $@ ; false)
+
 # DTC
 # ---------------------------------------------------------------------------
 DTC ?= $(objtree)/scripts/dtc/dtc
@@ -301,10 +309,11 @@ cmd_dt_S_dtb=						\
 $(obj)/%.dtb.S: $(obj)/%.dtb
 	$(call cmd,dt_S_dtb)
 
+DTCTOOL = $(KBUILD_SRC)/tools/dtc
 quiet_cmd_dtc = DTC     $@
 cmd_dtc = mkdir -p $(dir ${dtc-tmp}) ; \
 	$(CPP) $(dtc_cpp_flags) -x assembler-with-cpp -o $(dtc-tmp) $< ; \
-	$(DTC) -O dtb -o $@ -b 0 \
+	$(DTCTOOL)  -@ -O dtb -o $@ -b 0 \
 		-i $(dir $<) $(DTC_FLAGS) \
 		-d $(depfile).dtc.tmp $(dtc-tmp) ; \
 	cat $(depfile).pre.tmp $(depfile).dtc.tmp > $(depfile)
@@ -313,6 +322,15 @@ $(obj)/%.dtb: $(src)/%.dts FORCE
 	$(call if_changed_dep,dtc)
 
 dtc-tmp = $(subst $(comma),_,$(dot-target).dts.tmp)
+quiet_cmd_dtco = DTCO     $@
+cmd_dtco = mkdir -p $(dir ${dtc-tmp}) ; \
+        $(CPP) $(dtc_cpp_flags) -x assembler-with-cpp -o $(dtc-tmp) $< ; \
+        $(DTCTOOL)  -@ -p 1024 -a 4 -O dtb -o $@ -b 0 \
+		-i $(dir $<) $(DTC_FLAGS) \
+		-d $(depfile).dtc.tmp $(dtc-tmp) ; \
+	cat $(depfile).pre.tmp $(depfile).dtc.tmp > $(depfile)
+$(obj)/%.dtbo: $(src)/%.dts FORCE
+	$(call if_changed_dep,dtco)
 
 # cat
 # ---------------------------------------------------------------------------

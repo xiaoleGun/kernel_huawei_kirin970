@@ -700,8 +700,6 @@ static int rcar_i2c_master_xfer(struct i2c_adapter *adap,
 
 	pm_runtime_get_sync(dev);
 
-	rcar_i2c_init(priv);
-
 	ret = rcar_i2c_bus_barrier(priv);
 	if (ret < 0)
 		goto out;
@@ -723,12 +721,8 @@ static int rcar_i2c_master_xfer(struct i2c_adapter *adap,
 
 	time_left = wait_event_timeout(priv->wait, priv->flags & ID_DONE,
 				     num * adap->timeout);
-
-	/* cleanup DMA if it couldn't complete properly due to an error */
-	if (priv->dma_direction != DMA_NONE)
-		rcar_i2c_cleanup_dma(priv);
-
 	if (!time_left) {
+		rcar_i2c_cleanup_dma(priv);
 		rcar_i2c_init(priv);
 		ret = -ETIMEDOUT;
 	} else if (priv->flags & ID_NACK) {
@@ -862,6 +856,8 @@ static int rcar_i2c_probe(struct platform_device *pdev)
 	ret = rcar_i2c_clock_calculate(priv, &i2c_t);
 	if (ret < 0)
 		goto out_pm_put;
+
+	rcar_i2c_init(priv);
 
 	/* Don't suspend when multi-master to keep arbitration working */
 	if (of_property_read_bool(dev->of_node, "multi-master"))

@@ -27,6 +27,10 @@
 #include <linux/tick.h>
 #include <linux/irq.h>
 
+#ifdef CONFIG_HISI_BB
+#include <linux/hisi/rdr_hisi_ap_hook.h>
+#endif
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/irq.h>
 
@@ -75,21 +79,6 @@ static void wakeup_softirqd(void)
 
 	if (tsk && tsk->state != TASK_RUNNING)
 		wake_up_process(tsk);
-}
-
-/*
- * If ksoftirqd is scheduled, we do not want to process pending softirqs
- * right now. Let ksoftirqd handle this at its own rate, to get fairness,
- * unless we're doing some of the synchronous softirqs.
- */
-#define SOFTIRQ_NOW_MASK ((1 << HI_SOFTIRQ) | (1 << TASKLET_SOFTIRQ))
-static bool ksoftirqd_running(unsigned long pending)
-{
-	struct task_struct *tsk = __this_cpu_read(ksoftirqd);
-
-	if (pending & SOFTIRQ_NOW_MASK)
-		return false;
-	return tsk && (tsk->state == TASK_RUNNING);
 }
 
 /*
@@ -328,7 +317,7 @@ asmlinkage __visible void do_softirq(void)
 
 	pending = local_softirq_pending();
 
-	if (pending && !ksoftirqd_running(pending))
+	if (pending)
 		do_softirq_own_stack();
 
 	local_irq_restore(flags);
@@ -355,9 +344,6 @@ void irq_enter(void)
 
 static inline void invoke_softirq(void)
 {
-	if (ksoftirqd_running(local_softirq_pending()))
-		return;
-
 	if (!force_irqthreads) {
 #ifdef CONFIG_HAVE_IRQ_EXIT_ON_IRQ_STACK
 		/*
@@ -520,7 +506,13 @@ static __latent_entropy void tasklet_action(struct softirq_action *a)
 				if (!test_and_clear_bit(TASKLET_STATE_SCHED,
 							&t->state))
 					BUG();
+#ifdef CONFIG_HISI_BB
+				tasklet_hook((u64)(t->func), 0);
+#endif
 				t->func(t->data);
+#ifdef CONFIG_HISI_BB
+				tasklet_hook((u64)(t->func), 1);
+#endif
 				tasklet_unlock(t);
 				continue;
 			}

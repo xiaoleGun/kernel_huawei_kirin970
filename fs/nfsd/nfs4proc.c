@@ -1016,9 +1016,6 @@ nfsd4_verify_copy(struct svc_rqst *rqstp, struct nfsd4_compound_state *cstate,
 {
 	__be32 status;
 
-	if (!cstate->save_fh.fh_dentry)
-		return nfserr_nofilehandle;
-
 	status = nfs4_preprocess_stateid_op(rqstp, cstate, &cstate->save_fh,
 					    src_stateid, RD_STATE, src, NULL);
 	if (status) {
@@ -1341,14 +1338,14 @@ nfsd4_layoutget(struct svc_rqst *rqstp,
 	const struct nfsd4_layout_ops *ops;
 	struct nfs4_layout_stateid *ls;
 	__be32 nfserr;
-	int accmode = NFSD_MAY_READ_IF_EXEC;
+	int accmode;
 
 	switch (lgp->lg_seg.iomode) {
 	case IOMODE_READ:
-		accmode |= NFSD_MAY_READ;
+		accmode = NFSD_MAY_READ;
 		break;
 	case IOMODE_RW:
-		accmode |= NFSD_MAY_READ | NFSD_MAY_WRITE;
+		accmode = NFSD_MAY_READ | NFSD_MAY_WRITE;
 		break;
 	default:
 		dprintk("%s: invalid iomode %d\n",
@@ -1728,7 +1725,6 @@ nfsd4_proc_compound(struct svc_rqst *rqstp,
 	if (status) {
 		op = &args->ops[0];
 		op->status = status;
-		resp->opcnt = 1;
 		goto encode_op;
 	}
 

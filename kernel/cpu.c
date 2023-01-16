@@ -31,6 +31,9 @@
 #include <trace/events/cpuhp.h>
 
 #include "smpboot.h"
+#ifdef CONFIG_HISI_BB
+#include <linux/hisi/hisi_bbox_diaginfo.h>
+#endif
 
 /**
  * cpuhp_cpu_state - Per cpu hotplug state storage
@@ -246,6 +249,13 @@ static struct {
 #define cpuhp_lock_acquire()      lock_map_acquire(&cpu_hotplug.dep_map)
 #define cpuhp_lock_release()      lock_map_release(&cpu_hotplug.dep_map)
 
+#ifdef CONFIG_ARCH_HISI
+void cpu_hotplug_lock_held(void)
+{
+	lockdep_assert_held(&cpu_hotplug.lock);
+}
+EXPORT_SYMBOL(cpu_hotplug_lock_held);
+#endif
 
 void get_online_cpus(void)
 {
@@ -907,6 +917,7 @@ static int takedown_cpu(unsigned int cpu)
 
 	/* Park the smpboot threads */
 	kthread_park(per_cpu_ptr(&cpuhp_state, cpu)->thread);
+	smpboot_park_threads(cpu);
 
 	/*
 	 * Prevent irq alloc/free while the dying cpu reorganizes the
@@ -998,6 +1009,13 @@ static int __ref _cpu_down(unsigned int cpu, int tasks_frozen,
 
 	if (!cpu_present(cpu))
 		return -EINVAL;
+
+#ifdef CONFIG_HISI_CPU_ISOLATION
+	if (!tasks_frozen &&
+	    !cpu_isolated(cpu) &&
+	    num_online_uniso_cpus() == 1)
+		return -EBUSY;
+#endif
 
 	cpu_hotplug_begin();
 
@@ -1193,6 +1211,11 @@ static int do_cpu_up(unsigned int cpu, enum cpuhp_state target)
 	}
 
 	err = _cpu_up(cpu, 0, target);
+
+#ifdef CONFIG_HISI_BB
+    cpu_up_diaginfo_record(cpu, err);
+#endif
+
 out:
 	cpu_maps_update_done();
 	return err;
@@ -1489,7 +1512,7 @@ static struct cpuhp_step cpuhp_ap_states[] = {
 	[CPUHP_AP_SMPBOOT_THREADS] = {
 		.name			= "smpboot/threads:online",
 		.startup.single		= smpboot_unpark_threads,
-		.teardown.single	= smpboot_park_threads,
+		.teardown.single	= NULL,
 	},
 	[CPUHP_AP_PERF_ONLINE] = {
 		.name			= "perf:online",
@@ -1977,6 +2000,12 @@ static void cpuhp_online_cpu_device(unsigned int cpu)
 	kobject_uevent(&dev->kobj, KOBJ_ONLINE);
 }
 
+/*
+ * Architectures that need SMT-specific errata handling during SMT hotplug
+ * should override this.
+ */
+void __weak arch_smt_update(void) { };
+
 static int cpuhp_smt_disable(enum cpuhp_smt_control ctrlval)
 {
 	int cpu, ret = 0;
@@ -2003,8 +2032,10 @@ static int cpuhp_smt_disable(enum cpuhp_smt_control ctrlval)
 		 */
 		cpuhp_offline_cpu_device(cpu);
 	}
-	if (!ret)
+	if (!ret) {
 		cpu_smt_control = ctrlval;
+		arch_smt_update();
+	}
 	cpu_maps_update_done();
 	return ret;
 }
@@ -2015,6 +2046,7 @@ static int cpuhp_smt_enable(void)
 
 	cpu_maps_update_begin();
 	cpu_smt_control = CPU_SMT_ENABLED;
+	arch_smt_update();
 	for_each_present_cpu(cpu) {
 		/* Skip online CPUs and CPUs on offline nodes */
 		if (cpu_online(cpu) || !node_online(cpu_to_node(cpu)))
@@ -2174,6 +2206,11 @@ EXPORT_SYMBOL(__cpu_present_mask);
 struct cpumask __cpu_active_mask __read_mostly;
 EXPORT_SYMBOL(__cpu_active_mask);
 
+#ifdef CONFIG_HISI_CPU_ISOLATION
+struct cpumask __cpu_isolated_mask __read_mostly;
+EXPORT_SYMBOL(__cpu_isolated_mask);
+#endif
+
 void init_cpu_present(const struct cpumask *src)
 {
 	cpumask_copy(&__cpu_present_mask, src);
@@ -2189,6 +2226,13 @@ void init_cpu_online(const struct cpumask *src)
 	cpumask_copy(&__cpu_online_mask, src);
 }
 
+#ifdef CONFIG_HISI_CPU_ISOLATION
+void init_cpu_isolated(const struct cpumask *src)
+{
+	cpumask_copy(&__cpu_isolated_mask, src);
+}
+#endif
+
 /*
  * Activate the first processor.
  */
@@ -2201,6 +2245,9 @@ void __init boot_cpu_init(void)
 	set_cpu_active(cpu, true);
 	set_cpu_present(cpu, true);
 	set_cpu_possible(cpu, true);
+#ifdef CONFIG_HISI_CPU_ISOLATION
+	set_cpu_isolated(cpu, false);
+#endif
 }
 
 /*

@@ -1,6 +1,5 @@
 #include <linux/mm.h>
 #include <linux/gfp.h>
-#include <linux/hugetlb.h>
 #include <asm/pgalloc.h>
 #include <asm/pgtable.h>
 #include <asm/tlb.h>
@@ -346,6 +345,13 @@ static inline void _pgd_free(pgd_t *pgd)
 }
 #else
 
+/*
+ * Instead of one pgd, Kaiser acquires two pgds.  Being order-1, it is
+ * both 8k in size and 8k-aligned.  That lets us just flip bit 12
+ * in a pointer to swap between the two 4k halves.
+ */
+#define PGD_ALLOCATION_ORDER	kaiser_enabled
+
 static inline pgd_t *_pgd_alloc(void)
 {
 	return (pgd_t *)__get_free_pages(PGALLOC_GFP, PGD_ALLOCATION_ORDER);
@@ -578,10 +584,6 @@ int pud_set_huge(pud_t *pud, phys_addr_t addr, pgprot_t prot)
 	    (mtrr != MTRR_TYPE_WRBACK))
 		return 0;
 
-	/* Bail out if we are we on a populated non-leaf entry: */
-	if (pud_present(*pud) && !pud_huge(*pud))
-		return 0;
-
 	prot = pgprot_4k_2_large(prot);
 
 	set_pte((pte_t *)pud, pfn_pte(
@@ -609,10 +611,6 @@ int pmd_set_huge(pmd_t *pmd, phys_addr_t addr, pgprot_t prot)
 			     __func__, addr, addr + PMD_SIZE);
 		return 0;
 	}
-
-	/* Bail out if we are we on a populated non-leaf entry: */
-	if (pmd_present(*pmd) && !pmd_huge(*pmd))
-		return 0;
 
 	prot = pgprot_4k_2_large(prot);
 
@@ -653,53 +651,17 @@ int pmd_clear_huge(pmd_t *pmd)
 	return 0;
 }
 
-#ifdef CONFIG_X86_64
 /**
  * pud_free_pmd_page - Clear pud entry and free pmd page.
  * @pud: Pointer to a PUD.
  * @addr: Virtual address associated with pud.
  *
- * Context: The pud range has been unmapped and TLB purged.
+ * Context: The pud range has been unmaped and TLB purged.
  * Return: 1 if clearing the entry succeeded. 0 otherwise.
- *
- * NOTE: Callers must allow a single page allocation.
  */
 int pud_free_pmd_page(pud_t *pud, unsigned long addr)
 {
-	pmd_t *pmd, *pmd_sv;
-	pte_t *pte;
-	int i;
-
-	if (pud_none(*pud))
-		return 1;
-
-	pmd = (pmd_t *)pud_page_vaddr(*pud);
-	pmd_sv = (pmd_t *)__get_free_page(GFP_KERNEL);
-	if (!pmd_sv)
-		return 0;
-
-	for (i = 0; i < PTRS_PER_PMD; i++) {
-		pmd_sv[i] = pmd[i];
-		if (!pmd_none(pmd[i]))
-			pmd_clear(&pmd[i]);
-	}
-
-	pud_clear(pud);
-
-	/* INVLPG to clear all paging-structure caches */
-	flush_tlb_kernel_range(addr, addr + PAGE_SIZE-1);
-
-	for (i = 0; i < PTRS_PER_PMD; i++) {
-		if (!pmd_none(pmd_sv[i])) {
-			pte = (pte_t *)pmd_page_vaddr(pmd_sv[i]);
-			free_page((unsigned long)pte);
-		}
-	}
-
-	free_page((unsigned long)pmd_sv);
-	free_page((unsigned long)pmd);
-
-	return 1;
+	return pud_none(*pud);
 }
 
 /**
@@ -707,42 +669,11 @@ int pud_free_pmd_page(pud_t *pud, unsigned long addr)
  * @pmd: Pointer to a PMD.
  * @addr: Virtual address associated with pmd.
  *
- * Context: The pmd range has been unmapped and TLB purged.
+ * Context: The pmd range has been unmaped and TLB purged.
  * Return: 1 if clearing the entry succeeded. 0 otherwise.
- */
-int pmd_free_pte_page(pmd_t *pmd, unsigned long addr)
-{
-	pte_t *pte;
-
-	if (pmd_none(*pmd))
-		return 1;
-
-	pte = (pte_t *)pmd_page_vaddr(*pmd);
-	pmd_clear(pmd);
-
-	/* INVLPG to clear all paging-structure caches */
-	flush_tlb_kernel_range(addr, addr + PAGE_SIZE-1);
-
-	free_page((unsigned long)pte);
-
-	return 1;
-}
-
-#else /* !CONFIG_X86_64 */
-
-int pud_free_pmd_page(pud_t *pud, unsigned long addr)
-{
-	return pud_none(*pud);
-}
-
-/*
- * Disable free page handling on x86-PAE. This assures that ioremap()
- * does not update sync'd pmd entries. See vmalloc_sync_one().
  */
 int pmd_free_pte_page(pmd_t *pmd, unsigned long addr)
 {
 	return pmd_none(*pmd);
 }
-
-#endif /* CONFIG_X86_64 */
 #endif	/* CONFIG_HAVE_ARCH_HUGE_VMAP */

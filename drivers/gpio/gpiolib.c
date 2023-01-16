@@ -28,9 +28,12 @@
 #include <uapi/linux/gpio.h>
 
 #include "gpiolib.h"
-
 #define CREATE_TRACE_POINTS
 #include <trace/events/gpio.h>
+
+#ifdef CONFIG_GPIO_PL061
+#include "hisi_gpio.h"
+#endif
 
 /* Implementation infrastructure for GPIO interfaces.
  *
@@ -151,15 +154,18 @@ EXPORT_SYMBOL_GPL(gpiod_to_chip);
 static int gpiochip_find_base(int ngpio)
 {
 	struct gpio_device *gdev;
-	int base = ARCH_NR_GPIOS - ngpio;
+	int base = 0;
 
 	list_for_each_entry_reverse(gdev, &gpio_devices, list) {
 		/* found a free space? */
 		if (gdev->base + gdev->ngpio <= base)
 			break;
-		else
+		else{
 			/* nope, check the space right before the chip */
-			base = gdev->base - ngpio;
+			base = gdev->base + ngpio;
+			if (base > ARCH_NR_GPIOS)
+				return -ENOSPC;
+		}
 	}
 
 	if (gpio_is_valid(base)) {
@@ -1153,7 +1159,7 @@ int gpiochip_add_data(struct gpio_chip *chip, void *data)
 	gdev->descs = kcalloc(chip->ngpio, sizeof(gdev->descs[0]), GFP_KERNEL);
 	if (!gdev->descs) {
 		status = -ENOMEM;
-		goto err_free_ida;
+		goto err_free_gdev;
 	}
 
 	if (chip->ngpio == 0) {
@@ -1285,9 +1291,8 @@ err_free_label:
 	kfree(gdev->label);
 err_free_descs:
 	kfree(gdev->descs);
-err_free_ida:
-	ida_simple_remove(&gpio_ida, gdev->id);
 err_free_gdev:
+	ida_simple_remove(&gpio_ida, gdev->id);
 	/* failures here can mean systems won't boot... */
 	pr_err("%s: GPIOs %d..%d (%s) failed to register\n", __func__,
 	       gdev->base, gdev->base + gdev->ngpio - 1,
@@ -1823,6 +1828,11 @@ static inline void gpiochip_irqchip_free_valid_mask(struct gpio_chip *gpiochip)
  */
 int gpiochip_generic_request(struct gpio_chip *chip, unsigned offset)
 {
+#ifdef CONFIG_GPIO_PL061
+	struct pl061_gpio *gc = container_of(chip, struct pl061_gpio, gc);
+	if (pl061_check_security_status(gc))
+		return -EBUSY;
+#endif
 	return pinctrl_request_gpio(chip->gpiodev->base + offset);
 }
 EXPORT_SYMBOL_GPL(gpiochip_generic_request);
@@ -1834,6 +1844,11 @@ EXPORT_SYMBOL_GPL(gpiochip_generic_request);
  */
 void gpiochip_generic_free(struct gpio_chip *chip, unsigned offset)
 {
+#ifdef CONFIG_GPIO_PL061
+	struct pl061_gpio *gc = container_of(chip, struct pl061_gpio, gc);
+	if (pl061_check_security_status(gc))
+		return;
+#endif
 	pinctrl_free_gpio(chip->gpiodev->base + offset);
 }
 EXPORT_SYMBOL_GPL(gpiochip_generic_free);
@@ -2225,7 +2240,11 @@ int gpiod_direction_input(struct gpio_desc *desc)
 	return status;
 }
 EXPORT_SYMBOL_GPL(gpiod_direction_input);
-
+int gpio_direction_input(unsigned gpio)
+{
+	return gpiod_direction_input(gpio_to_desc(gpio));
+}
+EXPORT_SYMBOL_GPL(gpio_direction_input);
 static int _gpiod_direction_output_raw(struct gpio_desc *desc, int value)
 {
 	struct gpio_chip *gc = desc->gdev->chip;
@@ -2302,6 +2321,11 @@ int gpiod_direction_output_raw(struct gpio_desc *desc, int value)
 	return _gpiod_direction_output_raw(desc, value);
 }
 EXPORT_SYMBOL_GPL(gpiod_direction_output_raw);
+int gpio_direction_output(unsigned gpio, int value)
+{
+	return gpiod_direction_output_raw(gpio_to_desc(gpio), value);
+}
+EXPORT_SYMBOL_GPL(gpio_direction_output);
 
 /**
  * gpiod_direction_output - set the GPIO direction to output

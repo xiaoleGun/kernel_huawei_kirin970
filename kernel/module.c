@@ -63,12 +63,20 @@
 #include <linux/dynamic_debug.h>
 #include <uapi/linux/module.h>
 #include "module-internal.h"
+#ifdef CONFIG_MODULE_SIG
+#include <chipset_common/security/hw_kernel_stp_interface.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/module.h>
 
 #ifndef ARCH_SHF_SMALL
 #define ARCH_SHF_SMALL 0
+#endif
+
+#ifdef CONFIG_HISI_HHEE_TOKEN
+#include <linux/hisi/hisi_hhee.h>
+static unsigned long clarify_token;
 #endif
 
 /*
@@ -94,6 +102,8 @@
 DEFINE_MUTEX(module_mutex);
 EXPORT_SYMBOL_GPL(module_mutex);
 static LIST_HEAD(modules);
+DEFINE_MUTEX(klp_mutex);
+EXPORT_SYMBOL_GPL(klp_mutex);
 
 #ifdef CONFIG_MODULES_TREE_LOOKUP
 
@@ -986,7 +996,7 @@ SYSCALL_DEFINE2(delete_module, const char __user *, name_user,
 		mod->exit();
 	blocking_notifier_call_chain(&module_notify_list,
 				     MODULE_STATE_GOING, mod);
-	klp_module_going(mod);
+//	klp_module_going(mod);
 	ftrace_release_mod(mod);
 
 	async_synchronize_full();
@@ -1921,6 +1931,23 @@ void module_disable_ro(const struct module *mod)
 	frob_rodata(&mod->init_layout, set_memory_rw);
 }
 
+static inline void hhee_lkm_update(const struct module_layout *layout)
+{
+#ifdef CONFIG_HISI_HHEE_TOKEN
+	struct arm_smccc_res res;
+	if (HHEE_ENABLE != hhee_check_enable())
+			return;
+	arm_smccc_hvc(HHEE_LKM_UPDATE, (unsigned long)layout->base,
+			layout->text_size, clarify_token, 0, 0, 0, 0, &res);
+
+	if (res.a0)
+		pr_err("service from hhee failed test.\n");
+
+#else
+	(void *)layout;
+#endif
+}
+
 void module_enable_ro(const struct module *mod, bool after_init)
 {
 	if (!rodata_enabled)
@@ -1933,6 +1960,11 @@ void module_enable_ro(const struct module *mod, bool after_init)
 
 	if (after_init)
 		frob_ro_after_init(&mod->core_layout, set_memory_ro);
+
+	/* Note: make sure this is the last time
+	 * u change the page table to x or RO.*/
+	hhee_lkm_update(&mod->init_layout);
+	hhee_lkm_update(&mod->core_layout);
 }
 
 static void module_enable_nx(const struct module *mod)
@@ -2744,8 +2776,11 @@ static inline void kmemleak_load_module(const struct module *mod,
 static int module_sig_check(struct load_info *info, int flags)
 {
 	int err = -ENOKEY;
+	int ret;
 	const unsigned long markerlen = sizeof(MODULE_SIG_STRING) - 1;
 	const void *mod = info->hdr;
+	struct stp_item item;
+	(void)memset(&item, 0, sizeof(item));
 
 	/*
 	 * Require flags == 0, as a module with version information
@@ -2762,6 +2797,18 @@ static int module_sig_check(struct load_info *info, int flags)
 	if (!err) {
 		info->sig_ok = true;
 		return 0;
+	}
+	item.id = item_info[MOD_SIGN].id;
+	item.status = STP_RISK;
+	item.credible = STP_CREDIBLE;
+	item.version = 0;
+	(void)strncpy(item.name, item_info[MOD_SIGN].name, STP_ITEM_NAME_LEN - 1);
+	ret = kernel_stp_upload(item, NULL);
+	if (ret != 0) {
+		pr_err("stp mod_sign upload fail");
+	}
+	else {
+		pr_err("stp mod_sign upload success");
 	}
 
 	/* Not having a signature is only an error if we're strict. */
@@ -2836,15 +2883,6 @@ static int check_modinfo_livepatch(struct module *mod, struct load_info *info)
 	return 0;
 }
 #endif /* CONFIG_LIVEPATCH */
-
-static void check_modinfo_retpoline(struct module *mod, struct load_info *info)
-{
-	if (retpoline_module_ok(get_modinfo(info, "retpoline")))
-		return;
-
-	pr_warn("%s: loading module not compiled with retpoline compiler.\n",
-		mod->name);
-}
 
 /* Sets info->hdr and info->len. */
 static int copy_module_from_user(const void __user *umod, unsigned long len,
@@ -2997,8 +3035,6 @@ static int check_modinfo(struct module *mod, struct load_info *info, int flags)
 				mod->name);
 		add_taint_module(mod, TAINT_OOT_MODULE, LOCKDEP_STILL_OK);
 	}
-
-	check_modinfo_retpoline(mod, info);
 
 	if (get_modinfo(info, "staging")) {
 		add_taint_module(mod, TAINT_CRAP, LOCKDEP_STILL_OK);
@@ -3495,7 +3531,7 @@ fail:
 	module_put(mod);
 	blocking_notifier_call_chain(&module_notify_list,
 				     MODULE_STATE_GOING, mod);
-	klp_module_going(mod);
+//	klp_module_going(mod);
 	ftrace_release_mod(mod);
 	free_module(mod);
 	wake_up_all(&module_wq);
@@ -3581,15 +3617,15 @@ out:
 
 static int prepare_coming_module(struct module *mod)
 {
-	int err;
+//	int err;
 
 	ftrace_module_enable(mod);
-	err = klp_module_coming(mod);
-	if (err)
-		return err;
+//	err = klp_module_coming(mod);
+//	if (err)
+//		return err;
 
-	blocking_notifier_call_chain(&module_notify_list,
-				     MODULE_STATE_COMING, mod);
+//	blocking_notifier_call_chain(&module_notify_list,
+//				     MODULE_STATE_COMING, mod);
 	return 0;
 }
 
@@ -3674,21 +3710,26 @@ static int load_module(struct load_info *info, const char __user *uargs,
 
 	/* Set up MODINFO_ATTR fields */
 	setup_modinfo(mod, info);
-
+	mutex_lock(&klp_mutex);
 	/* Fix up syms, so that st_value is a pointer to location. */
 	err = simplify_symbols(mod, info);
-	if (err < 0)
+	if (err < 0) {
+		mutex_unlock(&klp_mutex);
 		goto free_modinfo;
+	}
 
 	err = apply_relocations(mod, info);
-	if (err < 0)
+	if (err < 0) {
+		mutex_unlock(&klp_mutex);
 		goto free_modinfo;
-
+	}
 	err = post_relocation(mod, info);
-	if (err < 0)
+	if (err < 0) {
+		mutex_unlock(&klp_mutex);
 		goto free_modinfo;
-
+	}
 	flush_module_icache(mod);
+	mutex_unlock(&klp_mutex);
 
 	/* Now copy in args */
 	mod->args = strndup_user(uargs, ~0UL >> 1);
@@ -3734,20 +3775,20 @@ static int load_module(struct load_info *info, const char __user *uargs,
 			goto sysfs_cleanup;
 	}
 
-	/* Get rid of temporary copy. */
-	free_copy(info);
-
 	/* Done! */
 	trace_module_load(mod);
 
-	return do_init_module(mod);
+	err = do_init_module(mod);
+	/* Get rid of temporary copy. */
+	free_copy(info);
+	return err;
 
  sysfs_cleanup:
 	mod_sysfs_teardown(mod);
  coming_cleanup:
 	blocking_notifier_call_chain(&module_notify_list,
 				     MODULE_STATE_GOING, mod);
-	klp_module_going(mod);
+//	klp_module_going(mod);
  bug_cleanup:
 	/* module_bug_cleanup needs module_mutex protection */
 	mutex_lock(&module_mutex);
@@ -4022,7 +4063,7 @@ static unsigned long mod_find_symname(struct module *mod, const char *name)
 
 	for (i = 0; i < kallsyms->num_symtab; i++)
 		if (strcmp(name, symname(kallsyms, i)) == 0 &&
-		    kallsyms->symtab[i].st_shndx != SHN_UNDEF)
+		    kallsyms->symtab[i].st_info != 'U')
 			return kallsyms->symtab[i].st_value;
 	return 0;
 }
@@ -4068,10 +4109,6 @@ int module_kallsyms_on_each_symbol(int (*fn)(void *, const char *,
 		if (mod->state == MODULE_STATE_UNFORMED)
 			continue;
 		for (i = 0; i < kallsyms->num_symtab; i++) {
-
-			if (kallsyms->symtab[i].st_shndx == SHN_UNDEF)
-				continue;
-
 			ret = fn(data, symname(kallsyms, i),
 				 mod, kallsyms->symtab[i].st_value);
 			if (ret != 0)
@@ -4198,6 +4235,21 @@ static int __init proc_modules_init(void)
 	return 0;
 }
 module_init(proc_modules_init);
+#endif
+
+#ifdef CONFIG_HISI_HHEE_TOKEN
+static int __init module_token_init(void)
+{
+
+	struct arm_smccc_res res;
+	if(HHEE_ENABLE == hhee_check_enable()){
+		arm_smccc_hvc(HHEE_HVC_TOKEN, 0, 0,
+			0, 0, 0, 0, 0, &res);
+		clarify_token = res.a1;
+	}
+	return 0;
+}
+module_init(module_token_init);
 #endif
 
 /* Given an address, look for it in the module exception tables. */

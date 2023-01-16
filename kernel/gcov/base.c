@@ -20,6 +20,8 @@
 #include <linux/mutex.h>
 #include <linux/sched.h>
 #include "gcov.h"
+#include <linux/mm.h>
+#include <linux/hisi/mntn_dump.h>
 
 static int gcov_events_enabled;
 static DEFINE_MUTEX(gcov_lock);
@@ -51,6 +53,17 @@ void __gcov_init(struct gcov_info *info)
 	mutex_unlock(&gcov_lock);
 }
 EXPORT_SYMBOL(__gcov_init);
+
+extern noinline int atfd_hisi_service_freqdump_smc(u64 _function_id, u64 _arg0, u64 _arg1, u64 _arg2);
+
+noinline void gcov_freqdump_atf(void)
+{
+		printk(KERN_ERR "%s: call start!\n", __func__);
+		atfd_hisi_service_freqdump_smc(0xC700EE0A,0,0,0);
+		printk(KERN_ERR "%s: call end!\n", __func__);
+		return ;
+}
+
 
 /*
  * These functions may be referenced by gcc-generated profiling code but serve
@@ -112,18 +125,82 @@ EXPORT_SYMBOL(__gcov_exit);
  * is needed because some events are potentially generated too early for the
  * callback implementation to handle them initially.
  */
+void *gcov_gcda_malloc_ptr;
+void *gcov_gcda_malloc_ptr_phy;
+void *gcov_gcda_malloc_ptr_curr;
+unsigned int  g_count_gcda;
+#define GCDA_TOTAL_SIZE_OF_4M  (3*1024*1024)
 void gcov_enable_events(void)
 {
 	struct gcov_info *info = NULL;
-
+	struct page * page_ptr= NULL;
+	page_ptr = alloc_pages(GFP_KERNEL | __GFP_ZERO,10);
+	if(page_ptr) {
+		gcov_gcda_malloc_ptr = page_to_virt(page_ptr);
+		gcov_gcda_malloc_ptr_curr = gcov_gcda_malloc_ptr;
+		gcov_gcda_malloc_ptr_phy = page_to_phys(page_ptr);
+		pr_err("gcov_gcda_malloc_ptr phy: %lx,virt = %lx\n",gcov_gcda_malloc_ptr_phy ,gcov_gcda_malloc_ptr);
+	}
 	mutex_lock(&gcov_lock);
 	gcov_events_enabled = 1;
-
 	/* Perform event callback for previously registered entries. */
 	while ((info = gcov_info_next(info))) {
 		gcov_event(GCOV_ADD, info);
 		cond_resched();
 	}
+
+	mutex_unlock(&gcov_lock);
+}
+
+static void mntn_dump_gcov_data(unsigned int size)
+{
+	int ret;
+	struct mdump_gcov *head;
+
+	if (!gcov_gcda_malloc_ptr_phy)
+		return;
+
+	ret = register_mntn_dump(MNTN_DUMP_GCOV,
+		(unsigned int)sizeof(struct mdump_gcov), (void **)&head);
+	if (ret) {
+		pr_err("register gcda buf fail\n");
+		return;
+	}
+
+	if (!head) {
+		pr_err("%s, head is NULL!\n", __func__);
+		return;
+	}
+
+	head->gcda_addr = gcov_gcda_malloc_ptr_phy;
+	head->gcda_size = size;
+}
+
+extern struct gcov_iterator *gcov_iter_new_gcov_get_panic_gcda(struct gcov_info *info);
+void gcov_get_gcda(void)
+{
+	struct gcov_info *info = NULL;
+
+	if (NULL == gcov_gcda_malloc_ptr) {
+		pr_err("gcov_gcda_malloc_ptr  NULL\n");
+		return ;
+	}
+	mutex_lock(&gcov_lock);
+	gcov_events_enabled = 1;
+	g_count_gcda = 0;
+	gcov_gcda_malloc_ptr_curr+=4;
+	/* Perform event callback for previously registered entries. */
+	while ((info = gcov_info_next(info))) {
+		if(gcov_gcda_malloc_ptr_curr-gcov_gcda_malloc_ptr >  GCDA_TOTAL_SIZE_OF_4M) {
+			pr_err("sorry ,no space to store gcda\n");
+			break;
+		}
+		gcov_iter_new_gcov_get_panic_gcda( info);
+		cond_resched();
+	}
+	*(unsigned int*)(gcov_gcda_malloc_ptr) = g_count_gcda;
+	mntn_dump_gcov_data((unsigned int)(gcov_gcda_malloc_ptr_curr - gcov_gcda_malloc_ptr));
+	pr_err("g_count_gcda = %d,gcov_gcda_malloc_ptr_phy = %lx\n",g_count_gcda,gcov_gcda_malloc_ptr_phy);
 
 	mutex_unlock(&gcov_lock);
 }

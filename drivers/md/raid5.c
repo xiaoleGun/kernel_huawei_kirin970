@@ -110,7 +110,8 @@ static inline void unlock_device_hash_lock(struct r5conf *conf, int hash)
 static inline void lock_all_device_hash_locks_irq(struct r5conf *conf)
 {
 	int i;
-	spin_lock_irq(conf->hash_locks);
+	local_irq_disable();
+	spin_lock(conf->hash_locks);
 	for (i = 1; i < NR_STRIPE_HASH_LOCKS; i++)
 		spin_lock_nest_lock(conf->hash_locks + i, conf->hash_locks);
 	spin_lock(&conf->device_lock);
@@ -120,9 +121,9 @@ static inline void unlock_all_device_hash_locks_irq(struct r5conf *conf)
 {
 	int i;
 	spin_unlock(&conf->device_lock);
-	for (i = NR_STRIPE_HASH_LOCKS - 1; i; i--)
-		spin_unlock(conf->hash_locks + i);
-	spin_unlock_irq(conf->hash_locks);
+	for (i = NR_STRIPE_HASH_LOCKS; i; i--)
+		spin_unlock(conf->hash_locks + i - 1);
+	local_irq_enable();
 }
 
 /* bio's attached to a stripe+device for I/O are linked together in bi_sector
@@ -731,11 +732,12 @@ static bool is_full_stripe_write(struct stripe_head *sh)
 
 static void lock_two_stripes(struct stripe_head *sh1, struct stripe_head *sh2)
 {
+	local_irq_disable();
 	if (sh1 > sh2) {
-		spin_lock_irq(&sh2->stripe_lock);
+		spin_lock(&sh2->stripe_lock);
 		spin_lock_nested(&sh1->stripe_lock, 1);
 	} else {
-		spin_lock_irq(&sh1->stripe_lock);
+		spin_lock(&sh1->stripe_lock);
 		spin_lock_nested(&sh2->stripe_lock, 1);
 	}
 }
@@ -743,7 +745,8 @@ static void lock_two_stripes(struct stripe_head *sh1, struct stripe_head *sh2)
 static void unlock_two_stripes(struct stripe_head *sh1, struct stripe_head *sh2)
 {
 	spin_unlock(&sh1->stripe_lock);
-	spin_unlock_irq(&sh2->stripe_lock);
+	spin_unlock(&sh2->stripe_lock);
+	local_irq_enable();
 }
 
 /* Only freshly new full stripe normal write stripe can be added to a batch list */
@@ -2049,16 +2052,15 @@ static int grow_one_stripe(struct r5conf *conf, gfp_t gfp)
 static int grow_stripes(struct r5conf *conf, int num)
 {
 	struct kmem_cache *sc;
-	size_t namelen = sizeof(conf->cache_name[0]);
 	int devs = max(conf->raid_disks, conf->previous_raid_disks);
 
 	if (conf->mddev->gendisk)
-		snprintf(conf->cache_name[0], namelen,
+		sprintf(conf->cache_name[0],
 			"raid%d-%s", conf->level, mdname(conf->mddev));
 	else
-		snprintf(conf->cache_name[0], namelen,
+		sprintf(conf->cache_name[0],
 			"raid%d-%p", conf->level, conf->mddev);
-	snprintf(conf->cache_name[1], namelen, "%.27s-alt", conf->cache_name[0]);
+	sprintf(conf->cache_name[1], "%s-alt", conf->cache_name[0]);
 
 	conf->active_name = 0;
 	sc = kmem_cache_create(conf->cache_name[conf->active_name],
@@ -3389,20 +3391,9 @@ static int fetch_block(struct stripe_head *sh, struct stripe_head_state *s,
 		BUG_ON(test_bit(R5_Wantcompute, &dev->flags));
 		BUG_ON(test_bit(R5_Wantread, &dev->flags));
 		BUG_ON(sh->batch_head);
-
-		/*
-		 * In the raid6 case if the only non-uptodate disk is P
-		 * then we already trusted P to compute the other failed
-		 * drives. It is safe to compute rather than re-read P.
-		 * In other cases we only compute blocks from failed
-		 * devices, otherwise check/repair might fail to detect
-		 * a real inconsistency.
-		 */
-
 		if ((s->uptodate == disks - 1) &&
-		    ((sh->qd_idx >= 0 && sh->pd_idx == disk_idx) ||
 		    (s->failed && (disk_idx == s->failed_num[0] ||
-				   disk_idx == s->failed_num[1])))) {
+				   disk_idx == s->failed_num[1]))) {
 			/* have disk failed, and we're requested to fetch it;
 			 * do compute it
 			 */
@@ -4207,12 +4198,6 @@ static void analyse_stripe(struct stripe_head *sh, struct stripe_head_state *s)
 			s->failed++;
 			if (rdev && !test_bit(Faulty, &rdev->flags))
 				do_recovery = 1;
-			else if (!rdev) {
-				rdev = rcu_dereference(
-				    conf->disks[i].replacement);
-				if (rdev && !test_bit(Faulty, &rdev->flags))
-					do_recovery = 1;
-			}
 		}
 	}
 	if (test_bit(STRIPE_SYNCING, &sh->state)) {
@@ -6170,10 +6155,10 @@ raid5_store_skip_copy(struct mddev *mddev, const char *page, size_t len)
 		mddev_suspend(mddev);
 		conf->skip_copy = new;
 		if (new)
-			mddev->queue->backing_dev_info.capabilities |=
+			mddev->queue->backing_dev_info->capabilities |=
 				BDI_CAP_STABLE_WRITES;
 		else
-			mddev->queue->backing_dev_info.capabilities &=
+			mddev->queue->backing_dev_info->capabilities &=
 				~BDI_CAP_STABLE_WRITES;
 		mddev_resume(mddev);
 	}
@@ -6999,8 +6984,8 @@ static int raid5_run(struct mddev *mddev)
 		int data_disks = conf->previous_raid_disks - conf->max_degraded;
 		int stripe = data_disks *
 			((mddev->chunk_sectors << 9) / PAGE_SIZE);
-		if (mddev->queue->backing_dev_info.ra_pages < 2 * stripe)
-			mddev->queue->backing_dev_info.ra_pages = 2 * stripe;
+		if (mddev->queue->backing_dev_info->ra_pages < 2 * stripe)
+			mddev->queue->backing_dev_info->ra_pages = 2 * stripe;
 
 		chunk_size = mddev->chunk_sectors << 9;
 		blk_queue_io_min(mddev->queue, chunk_size);
@@ -7606,8 +7591,8 @@ static void end_reshape(struct r5conf *conf)
 			int data_disks = conf->raid_disks - conf->max_degraded;
 			int stripe = data_disks * ((conf->chunk_sectors << 9)
 						   / PAGE_SIZE);
-			if (conf->mddev->queue->backing_dev_info.ra_pages < 2 * stripe)
-				conf->mddev->queue->backing_dev_info.ra_pages = 2 * stripe;
+			if (conf->mddev->queue->backing_dev_info->ra_pages < 2 * stripe)
+				conf->mddev->queue->backing_dev_info->ra_pages = 2 * stripe;
 		}
 	}
 }
@@ -7621,7 +7606,13 @@ static void raid5_finish_reshape(struct mddev *mddev)
 
 	if (!test_bit(MD_RECOVERY_INTR, &mddev->recovery)) {
 
-		if (mddev->delta_disks <= 0) {
+		if (mddev->delta_disks > 0) {
+			md_set_array_sectors(mddev, raid5_size(mddev, 0, 0));
+			if (mddev->queue) {
+				set_capacity(mddev->gendisk, mddev->array_sectors);
+				revalidate_disk(mddev->gendisk);
+			}
+		} else {
 			int d;
 			spin_lock_irq(&conf->device_lock);
 			mddev->degraded = calc_degraded(conf);

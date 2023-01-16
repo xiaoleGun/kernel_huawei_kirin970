@@ -38,11 +38,21 @@
 int __initdata rd_doload;	/* 1 = load RAM disk, 0 = don't load */
 
 int root_mountflags = MS_RDONLY | MS_SILENT;
+
 static char * __initdata root_device_name;
 static char __initdata saved_root_name[64];
 static int root_wait;
 
 dev_t ROOT_DEV;
+
+#ifdef CONFIG_HISI_ENGINEER_MODE
+extern void engineer_mode_mount(void);
+#endif
+
+extern dev_t begin_oae_dm(dev_t orginal_dev,
+			  char *saved_root_name,
+			  char *root_device_name);
+extern void end_oae_dm(void);
 
 static int __init load_ramdisk(char *str)
 {
@@ -438,7 +448,7 @@ retry:
 out:
 	put_page(page);
 }
- 
+
 #ifdef CONFIG_ROOT_NFS
 
 #define NFSROOT_TIMEOUT_MIN	5
@@ -534,12 +544,22 @@ void __init mount_root(void)
 #endif
 #ifdef CONFIG_BLOCK
 	{
-		int err = create_dev("/dev/root", ROOT_DEV);
+		int err;
+
+		ROOT_DEV = begin_oae_dm(ROOT_DEV, saved_root_name,
+					root_device_name);
+
+		err = create_dev("/dev/root", ROOT_DEV);
 
 		if (err < 0)
 			pr_emerg("Failed to create /dev/root: %d\n", err);
 		mount_block_root("/dev/root", root_mountflags);
+
+		end_oae_dm();
 	}
+#endif
+#ifdef CONFIG_HISI_ENGINEER_MODE
+	engineer_mode_mount();
 #endif
 }
 

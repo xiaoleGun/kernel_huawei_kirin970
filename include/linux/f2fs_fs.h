@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0
 /**
  * include/linux/f2fs_fs.h
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd.
  *             http://www.samsung.com/
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #ifndef _LINUX_F2FS_FS_H
 #define _LINUX_F2FS_FS_H
@@ -18,7 +21,7 @@
 #define F2FS_BLKSIZE			4096	/* support only 4KB block */
 #define F2FS_BLKSIZE_BITS		12	/* bits for F2FS_BLKSIZE */
 #define F2FS_MAX_EXTENSION		64	/* # of extension entries */
-#define F2FS_EXTENSION_LEN		8	/* max size of extension */
+#define F2FS_EXTENSION_LEN             8       /* max size of extension */
 #define F2FS_BLK_ALIGN(x)	(((x) + F2FS_BLKSIZE - 1) >> F2FS_BLKSIZE_BITS)
 
 #define NULL_ADDR		((block_t)0)	/* used as block_t addresses */
@@ -36,14 +39,15 @@
 
 #define F2FS_MAX_QUOTAS		3
 
-#define F2FS_IO_SIZE(sbi)	(1 << F2FS_OPTION(sbi).write_io_size_bits) /* Blocks */
-#define F2FS_IO_SIZE_KB(sbi)	(1 << (F2FS_OPTION(sbi).write_io_size_bits + 2)) /* KB */
-#define F2FS_IO_SIZE_BYTES(sbi)	(1 << (F2FS_OPTION(sbi).write_io_size_bits + 12)) /* B */
-#define F2FS_IO_SIZE_BITS(sbi)	(F2FS_OPTION(sbi).write_io_size_bits) /* power of 2 */
+#define F2FS_IO_SIZE(sbi)	(1 << (sbi)->write_io_size_bits) /* Blocks */
+#define F2FS_IO_SIZE_KB(sbi)	(1 << ((sbi)->write_io_size_bits + 2)) /* KB */
+#define F2FS_IO_SIZE_BYTES(sbi)	(1 << ((sbi)->write_io_size_bits + 12)) /* B */
+#define F2FS_IO_SIZE_BITS(sbi)	((sbi)->write_io_size_bits) /* power of 2 */
 #define F2FS_IO_SIZE_MASK(sbi)	(F2FS_IO_SIZE(sbi) - 1)
 
 /* This flag is used by node and meta inodes, and by recovery */
 #define GFP_F2FS_ZERO		(GFP_NOFS | __GFP_ZERO)
+#define GFP_F2FS_HIGH_ZERO	(GFP_NOFS | __GFP_ZERO | __GFP_HIGHMEM)
 
 /*
  * For further optimization on multi-head logs, on-disk layout supports maximum
@@ -116,9 +120,7 @@ struct f2fs_super_block {
 /*
  * For checkpoint
  */
-#define CP_DISABLED_FLAG		0x00001000
-#define CP_QUOTA_NEED_FSCK_FLAG		0x00000800
-#define CP_LARGE_NAT_BITMAP_FLAG	0x00000400
+#define CP_QUOTA_NEED_FSCK_FLAG	0x00001000
 #define CP_NOCRC_RECOVERY_FLAG	0x00000200
 #define CP_TRIMMED_FLAG		0x00000100
 #define CP_NAT_BITS_FLAG	0x00000080
@@ -129,6 +131,10 @@ struct f2fs_super_block {
 #define CP_COMPACT_SUM_FLAG	0x00000004
 #define CP_ORPHAN_PRESENT_FLAG	0x00000002
 #define CP_UMOUNT_FLAG		0x00000001
+#ifdef CONFIG_F2FS_JOURNAL_APPEND
+#define CP_APPEND_SIT_FLAG	0x00000400
+#define CP_APPEND_NAT_FLAG	0x00000800
+#endif
 
 #define F2FS_CP_PACKS		2	/* # of checkpoint packs */
 
@@ -405,6 +411,13 @@ struct summary_footer {
 				sizeof(struct sit_journal_entry))
 #define SIT_JOURNAL_RESERVED	((SUM_JOURNAL_SIZE - 2) %\
 				sizeof(struct sit_journal_entry))
+
+#ifdef CONFIG_F2FS_JOURNAL_APPEND
+#define NAT_APPEND_JOURNAL_ENTRIES	(F2FS_BLKSIZE /\
+					sizeof(struct nat_journal_entry))
+#define SIT_APPEND_JOURNAL_ENTRIES	(F2FS_BLKSIZE /\
+					sizeof(struct sit_journal_entry))
+#endif
 
 /* Reserved area should make size of f2fs_extra_info equals to
  * that of nat_journal and sit_journal.

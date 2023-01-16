@@ -1083,11 +1083,10 @@ int ip6_tnl_xmit(struct sk_buff *skb, struct net_device *dev, __u8 dsfield,
 			memcpy(&fl6->daddr, addr6, sizeof(fl6->daddr));
 			neigh_release(neigh);
 		}
-	} else if (t->parms.proto != 0 && !(t->parms.flags &
-					    (IP6_TNL_F_USE_ORIG_TCLASS |
-					     IP6_TNL_F_USE_ORIG_FWMARK))) {
-		/* enable the cache only if neither the outer protocol nor the
-		 * routing decision depends on the current inner header value
+	} else if (!(t->parms.flags &
+		     (IP6_TNL_F_USE_ORIG_TCLASS | IP6_TNL_F_USE_ORIG_FWMARK))) {
+		/* enable the cache only only if the routing decision does
+		 * not depend on the current inner header value
 		 */
 		use_cache = true;
 	}
@@ -1185,6 +1184,11 @@ route_lookup:
 	}
 	skb_dst_set(skb, dst);
 
+	if (encap_limit >= 0) {
+		init_tel_txopt(&opt, encap_limit);
+		ipv6_push_nfrag_opts(skb, &opt.ops, &proto, NULL);
+	}
+
 	/* Calculate max headroom for all the headers and adjust
 	 * needed_headroom if necessary.
 	 */
@@ -1196,11 +1200,6 @@ route_lookup:
 	err = ip6_tnl_encap(skb, t, &proto, fl6);
 	if (err)
 		return err;
-
-	if (encap_limit >= 0) {
-		init_tel_txopt(&opt, encap_limit);
-		ipv6_push_nfrag_opts(skb, &opt.ops, &proto, NULL);
-	}
 
 	skb_push(skb, sizeof(struct ipv6hdr));
 	skb_reset_network_header(skb);

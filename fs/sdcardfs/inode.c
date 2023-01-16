@@ -205,7 +205,7 @@ static int sdcardfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode
 	struct dentry *lower_dentry;
 	struct vfsmount *lower_mnt;
 	struct dentry *lower_parent_dentry = NULL;
-	struct dentry *parent_dentry = NULL;
+	struct dentry *parent_dentry = dget_parent(dentry);
 	struct path lower_path;
 	struct sdcardfs_sb_info *sbi = SDCARDFS_SB(dentry->d_sb);
 	const struct cred *saved_cred = NULL;
@@ -228,14 +228,11 @@ static int sdcardfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode
 		return -ENOMEM;
 
 	/* check disk space */
-	parent_dentry = dget_parent(dentry);
 	if (!check_min_free_space(parent_dentry, 0, 1)) {
 		pr_err("sdcardfs: No minimum free space.\n");
 		err = -ENOSPC;
-		dput(parent_dentry);
 		goto out_revert;
 	}
-	dput(parent_dentry);
 
 	/* the lower_dentry is negative here */
 	sdcardfs_get_lower_path(dentry, &lower_path);
@@ -307,21 +304,21 @@ static int sdcardfs_mkdir(struct inode *dir, struct dentry *dentry, umode_t mode
 	if (make_nomedia_in_obb ||
 		((pd->perm == PERM_ANDROID)
 				&& (qstr_case_eq(&dentry->d_name, &q_data)))) {
-		revert_fsids(saved_cred);
-		saved_cred = override_fsids(sbi,
-					SDCARDFS_I(d_inode(dentry))->data);
-		if (!saved_cred) {
-			pr_err("sdcardfs: failed to set up .nomedia in %s: %d\n",
-						lower_path.dentry->d_name.name,
-						-ENOMEM);
-			goto out;
-		}
+	        revert_fsids(saved_cred);
+	        saved_cred = override_fsids(sbi,
+			    SDCARDFS_I(dentry->d_inode)->data);
+	        if (!saved_cred) {
+	            pr_err("sdcardfs: failed to set up .nomedia in %s: %d\n",
+			        lower_path.dentry->d_name.name,
+			        -ENOMEM);
+	            goto out;
+	        }
 		set_fs_pwd(current->fs, &lower_path);
 		touch_err = touch(".nomedia", 0664);
 		if (touch_err) {
 			pr_err("sdcardfs: failed to create .nomedia in %s: %d\n",
-						lower_path.dentry->d_name.name,
-						touch_err);
+			       lower_path.dentry->d_name.name,
+			       touch_err);
 			goto out;
 		}
 	}
@@ -336,6 +333,7 @@ out_unlock:
 out_revert:
 	revert_fsids(saved_cred);
 out_eacces:
+	dput(parent_dentry);
 	return err;
 }
 
@@ -555,6 +553,9 @@ void copy_attrs(struct inode *dest, const struct inode *src)
 static int sdcardfs_permission(struct vfsmount *mnt, struct inode *inode, int mask)
 {
 	int err;
+#ifdef SDCARDFS_PLUGIN_PRIVACY_SPACE
+	struct sdcardfs_sb_info *sbi;
+#endif
 	struct inode tmp;
 	struct sdcardfs_inode_data *top = top_data_get(SDCARDFS_I(inode));
 
@@ -584,7 +585,18 @@ static int sdcardfs_permission(struct vfsmount *mnt, struct inode *inode, int ma
 	if (IS_POSIXACL(inode))
 		pr_warn("%s: This may be undefined behavior...\n", __func__);
 	err = generic_permission(&tmp, mask);
+
+#ifdef SDCARDFS_PLUGIN_PRIVACY_SPACE
+	sbi = SDCARDFS_SB(inode->i_sb);
+	if (unlikely(sbi->blocked_userid >= 0)) {
+		uid_t uid = from_kuid(&init_user_ns, current_fsuid()); /*lint !e666*/
+		if (multiuser_get_user_id(uid) == sbi->blocked_userid &&
+			multiuser_get_app_id(uid) != sbi->appid_excluded)
+			return -EACCES;
+	}
+#endif
 	return err;
+
 }
 
 static int sdcardfs_setattr_wrn(struct dentry *dentry, struct iattr *ia)
@@ -807,6 +819,8 @@ const struct inode_operations sdcardfs_dir_iops = {
 	.setattr	= sdcardfs_setattr_wrn,
 	.setattr2	= sdcardfs_setattr,
 	.getattr	= sdcardfs_getattr,
+
+	.listxattr = sdcardfs_listxattr,
 };
 
 const struct inode_operations sdcardfs_main_iops = {
@@ -815,4 +829,6 @@ const struct inode_operations sdcardfs_main_iops = {
 	.setattr	= sdcardfs_setattr_wrn,
 	.setattr2	= sdcardfs_setattr,
 	.getattr	= sdcardfs_getattr,
+
+	.listxattr = sdcardfs_listxattr,
 };

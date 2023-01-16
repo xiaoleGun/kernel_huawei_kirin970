@@ -113,6 +113,16 @@
 unsigned int sysctl_net_busy_read __read_mostly;
 unsigned int sysctl_net_busy_poll __read_mostly;
 #endif
+#ifdef CONFIG_HUAWEI_XENGINE
+#include <huawei_platform/emcom/emcom_xengine.h>
+#endif
+#ifdef CONFIG_HUAWEI_BASTET
+#include <huawei_platform/net/bastet/bastet.h>
+#endif
+#ifdef CONFIG_HW_FDLEAK
+#include <chipset_common/hwfdleak/fdleak.h>
+#endif
+
 
 static ssize_t sock_read_iter(struct kiocb *iocb, struct iov_iter *to);
 static ssize_t sock_write_iter(struct kiocb *iocb, struct iov_iter *from);
@@ -427,6 +437,9 @@ struct file *sock_alloc_file(struct socket *sock, int flags, const char *dname)
 	sock->file = file;
 	file->f_flags = O_RDWR | (flags & O_NONBLOCK);
 	file->private_data = sock;
+#ifdef CONFIG_HW_FDLEAK
+	fdleak_report(FDLEAK_WP_SOCKET, 0);
+#endif
 	return file;
 }
 EXPORT_SYMBOL(sock_alloc_file);
@@ -441,6 +454,9 @@ static int sock_map_fd(struct socket *sock, int flags)
 	newfile = sock_alloc_file(sock, flags, NULL);
 	if (likely(!IS_ERR(newfile))) {
 		fd_install(fd, newfile);
+#ifdef CONFIG_MPTCP
+		sock->fd = fd;
+#endif
 		return fd;
 	}
 
@@ -580,6 +596,11 @@ struct socket *sock_alloc(void)
 	inode->i_uid = current_fsuid();
 	inode->i_gid = current_fsgid();
 	inode->i_op = &sockfs_inode_ops;
+#if defined(CONFIG_HUAWEI_KSTATE) || defined(CONFIG_MPTCP)
+	if (sock != NULL && current != NULL) {
+		sock->pid = current->tgid;
+	}
+#endif
 
 	this_cpu_add(sockets_in_use, 1);
 	return sock;
@@ -618,6 +639,9 @@ static void __sock_release(struct socket *sock, struct inode *inode)
 		return;
 	}
 	sock->file = NULL;
+#ifdef CONFIG_HW_FDLEAK
+	fdleak_report(FDLEAK_WP_SOCKET, 1);
+#endif
 }
 
 void sock_release(struct socket *sock)
@@ -1212,6 +1236,9 @@ int __sock_create(struct net *net, int family, int type, int protocol,
 	if (err)
 		goto out_sock_release;
 	*res = sock;
+#ifdef CONFIG_HUAWEI_XENGINE
+	Emcom_Xengine_Mpip_Bind2Device(sock->sk);
+#endif
 
 	return 0;
 

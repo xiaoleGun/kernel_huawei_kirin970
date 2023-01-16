@@ -1422,8 +1422,6 @@ void acpi_init_device_object(struct acpi_device *device, acpi_handle handle,
 	device_initialize(&device->dev);
 	dev_set_uevent_suppress(&device->dev, true);
 	acpi_init_coherency(device);
-	/* Assume there are unmet deps until acpi_device_dep_initialize() runs */
-	device->dep_unmet = 1;
 }
 
 void acpi_device_add_finalize(struct acpi_device *device)
@@ -1447,15 +1445,6 @@ static int acpi_add_single_object(struct acpi_device **child,
 	}
 
 	acpi_init_device_object(device, handle, type, sta);
-	/*
-	 * For ACPI_BUS_TYPE_DEVICE getting the status is delayed till here so
-	 * that we can call acpi_bus_get_status() and use its quirk handling.
-	 * Note this must be done before the get power-/wakeup_dev-flags calls.
-	 */
-	if (type == ACPI_BUS_TYPE_DEVICE)
-		if (acpi_bus_get_status(device) < 0)
-			acpi_set_device_status(device, 0);
-
 	acpi_bus_get_power_flags(device);
 	acpi_bus_get_wakeup_device_flags(device);
 
@@ -1528,11 +1517,9 @@ static int acpi_bus_type_and_status(acpi_handle handle, int *type,
 			return -ENODEV;
 
 		*type = ACPI_BUS_TYPE_DEVICE;
-		/*
-		 * acpi_add_single_object updates this once we've an acpi_device
-		 * so that acpi_bus_get_status' quirk handling can be used.
-		 */
-		*sta = ACPI_STA_DEFAULT;
+		status = acpi_bus_get_status_handle(handle, sta);
+		if (ACPI_FAILURE(status))
+			*sta = 0;
 		break;
 	case ACPI_TYPE_PROCESSOR:
 		*type = ACPI_BUS_TYPE_PROCESSOR;
@@ -1633,8 +1620,6 @@ static void acpi_device_dep_initialize(struct acpi_device *adev)
 	struct acpi_handle_list dep_devices;
 	acpi_status status;
 	int i;
-
-	adev->dep_unmet = 0;
 
 	if (!acpi_has_method(adev->handle, "_DEP"))
 		return;

@@ -86,6 +86,7 @@ config ARM64
 	select HAVE_GENERIC_DMA_COHERENT
 	select HAVE_HW_BREAKPOINT if PERF_EVENTS
 	select HAVE_IRQ_TIME_ACCOUNTING
+	select HAVE_HW_BREAKPOINT_ADDR_MASK
 	select HAVE_MEMBLOCK
 	select HAVE_MEMBLOCK_NODE_MAP if NUMA
 	select HAVE_PATA_PLATFORM
@@ -110,6 +111,7 @@ config ARM64
 	select POWER_SUPPLY
 	select SPARSE_IRQ
 	select SYSCTL_EXCEPTION_TRACE
+	select HAVE_LIVEPATCH
 	select THREAD_INFO_IN_TASK
 	help
 	  ARM 64-bit (AArch64) Linux support.
@@ -243,6 +245,8 @@ config PGTABLE_LEVELS
 source "init/Kconfig"
 
 source "kernel/Kconfig.freezer"
+
+source "kernel/livepatch/Kconfig"
 
 source "arch/arm64/Kconfig.platforms"
 
@@ -502,6 +506,23 @@ config QCOM_QDF2400_ERRATUM_0065
 
 endmenu
 
+config ARM64_ERRATUM_858921
+	bool "Cortex-A73 858921: Possible wrong read value for CNTVCT or CNTPCT value"
+	default y
+	depends on ARM_ARCH_TIMER && ARM64
+	help
+	  This option enables a workaround for Cortex-A73 Category B
+	  858921 ("Possible wrong read value for CNTVCT or CNTPCT
+	  value").
+
+	  CNTVCT and CNTPCT are updated according to the counter value given by
+	  CNTVALUEB input bus. If CNTVCT and CNTPCT are read while they are updated
+	  with the lower 32 bits rolled-over, it is possible to read a wrong transient
+	  value CNTVCT or CNTPCT respectively.
+
+	  The workaround is to read the CNTVCT or CNTPCT twice. If the bit 32 of the 2
+	  values is not same, use the first value otherwise use the second one.
+
 
 choice
 	prompt "Page size"
@@ -644,6 +665,9 @@ config ARCH_SUPPORTS_DEBUG_PAGEALLOC
 config ARCH_HAS_HOLES_MEMORYMODEL
 	def_bool y if SPARSEMEM
 
+config ARCH_FLATMEM_ENABLE
+	def_bool y
+
 config ARCH_SPARSEMEM_ENABLE
 	def_bool y
 	select SPARSEMEM_VMEMMAP_ENABLE
@@ -660,6 +684,11 @@ config HAVE_ARCH_PFN_VALID
 config HW_PERF_EVENTS
 	def_bool y
 	depends on ARM_PMU
+
+config HISI_HW_PERF_EVENTS
+	bool "HISI perf PMU event debug"
+	depends on HW_PERF_EVENTS
+	default n
 
 config SYS_SUPPORTS_HUGETLBFS
 	def_bool y
@@ -778,6 +807,13 @@ config HARDEN_BRANCH_PREDICTOR
 
 	  If unsure, say Y.
 
+config HISI_HARDEN_BRANCH_PREDICTOR
+	bool "Hisilicon Harden the branch predictor solution" if EXPERT
+	default n
+	depends on HARDEN_BRANCH_PREDICTOR
+	help
+	  Hisilicon optimizations for harden branch predictor schema.
+
 config ARM64_SSBD
 	bool "Speculative Store Bypass Disable" if EXPERT
 	default y
@@ -786,6 +822,15 @@ config ARM64_SSBD
 	  by speculative loads.
 
 	  If unsure, say Y.
+
+config HISI_BYPASS_SSBS
+	bool "Hisilicon bypass SSBS solution" if EXPERT
+	default n
+	depends on ARM64_SSBD
+	help
+	  This bypass SSBS solution on platform which has SSBS feature, make
+	  it get back to SSBD solution, notice that DSSBS bit should be set
+	  for sctlr of all el level in arm trust firmware.
 
 menuconfig ARMV8_DEPRECATED
 	bool "Emulate deprecated/obsolete ARMv8 instructions"

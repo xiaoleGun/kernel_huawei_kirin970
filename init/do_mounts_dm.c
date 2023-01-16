@@ -26,6 +26,10 @@
 #define DM_FIELD_SEP " "
 #define DM_LINE_SEP ","
 #define DM_ANY_SEP DM_FIELD_SEP DM_LINE_SEP
+#ifdef CONFIG_OAE_DM_ROOT
+char *g_root_sha_para;
+#define ROOT_DEV_NAME "vroot"
+#endif
 
 /*
  * When the device-mapper and any targets are compiled into the kernel
@@ -349,11 +353,15 @@ static void __init dm_setup_drives(void)
 	struct dm_table *table = NULL;
 	struct dm_setup_target *target;
 	struct dm_device *dev;
-	char *uuid;
+	char *uuid = NULL;
 	fmode_t fmode = FMODE_READ;
 	struct dm_device *devices;
 
 	devices = dm_parse_args();
+#ifdef CONFIG_OAE_DM_ROOT
+	if (strcmp(devices->name, ROOT_DEV_NAME) == 0)
+		g_root_sha_para = kstrdup(devices->target->params, GFP_KERNEL);
+#endif
 
 	for (dev = devices; dev; dev = dev->next) {
 		if (dm_create(dev->minor, &md)) {

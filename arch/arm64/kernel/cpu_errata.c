@@ -16,8 +16,9 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <linux/arm-smccc.h>
+#include <linux/psci.h>
 #include <linux/types.h>
-#include <asm/cachetype.h>
 #include <asm/cpu.h>
 #include <asm/cputype.h>
 #include <asm/cpufeature.h>
@@ -32,24 +33,17 @@ is_affected_midr_range(const struct arm64_cpu_capabilities *entry, int scope)
 }
 
 static bool
-has_mismatched_cache_type(const struct arm64_cpu_capabilities *entry,
-			  int scope)
+has_mismatched_cache_line_size(const struct arm64_cpu_capabilities *entry,
+				int scope)
 {
-	u64 mask = CTR_CACHE_MINLINE_MASK;
-
-	/* Skip matching the min line sizes for cache type check */
-	if (entry->capability == ARM64_MISMATCHED_CACHE_TYPE)
-		mask ^= arm64_ftr_reg_ctrel0.strict_mask;
-
 	WARN_ON(scope != SCOPE_LOCAL_CPU || preemptible());
-	return (read_cpuid_cachetype() & mask) !=
-	       (arm64_ftr_reg_ctrel0.sys_val & mask);
+	return (read_cpuid_cachetype() & arm64_ftr_reg_ctrel0.strict_mask) !=
+		(arm64_ftr_reg_ctrel0.sys_val & arm64_ftr_reg_ctrel0.strict_mask);
 }
 
 static int cpu_enable_trap_ctr_access(void *__unused)
 {
-	/* Clear SCTLR_EL1.UCT */
-	config_sctlr_el1(SCTLR_EL1_UCT, 0);
+	sysreg_clear_set(sctlr_el1, SCTLR_EL1_UCT, 0);
 	return 0;
 }
 
@@ -160,10 +154,14 @@ static int enable_smccc_arch_workaround_1(void *data)
 	if (!entry->matches(entry, SCOPE_LOCAL_CPU))
 		return 0;
 
+#ifndef CONFIG_ARCH_HISI
 	if (psci_ops.smccc_version == SMCCC_VERSION_1_0)
 		return 0;
 
 	switch (psci_ops.conduit) {
+#else
+	switch (PSCI_CONDUIT_SMC) {
+#endif
 	case PSCI_CONDUIT_HVC:
 		arm_smccc_1_1_hvc(ARM_SMCCC_ARCH_FEATURES_FUNC_ID,
 				  ARM_SMCCC_ARCH_WORKAROUND_1, &res);
@@ -237,7 +235,11 @@ void __init arm64_update_smccc_conduit(struct alt_instr *alt,
 
 	BUG_ON(nr_inst != 1);
 
+#ifdef CONFIG_ARCH_HISI
+	switch (PSCI_CONDUIT_SMC) {
+#else
 	switch (psci_ops.conduit) {
+#endif
 	case PSCI_CONDUIT_HVC:
 		insn = aarch64_insn_get_hvc_value();
 		break;
@@ -247,7 +249,6 @@ void __init arm64_update_smccc_conduit(struct alt_instr *alt,
 	default:
 		return;
 	}
-
 	*updptr = cpu_to_le32(insn);
 }
 
@@ -267,7 +268,21 @@ void __init arm64_enable_wa2_handling(struct alt_instr *alt,
 
 void arm64_set_ssbd_mitigation(bool state)
 {
+#ifndef CONFIG_HISI_BYPASS_SSBS
+	if (this_cpu_has_cap(ARM64_SSBS)) {
+		if (state)
+			asm volatile(SET_PSTATE_SSBS(0));
+		else
+			asm volatile(SET_PSTATE_SSBS(1));
+		return;
+	}
+#endif
+
+#ifdef CONFIG_ARCH_HISI
+	switch (PSCI_CONDUIT_SMC) {
+#else
 	switch (psci_ops.conduit) {
+#endif
 	case PSCI_CONDUIT_HVC:
 		arm_smccc_1_1_hvc(ARM_SMCCC_ARCH_WORKAROUND_2, state, NULL);
 		break;
@@ -291,12 +306,28 @@ static bool has_ssbd_mitigation(const struct arm64_cpu_capabilities *entry,
 
 	WARN_ON(scope != SCOPE_LOCAL_CPU || preemptible());
 
-	if (psci_ops.smccc_version == SMCCC_VERSION_1_0) {
+#ifndef CONFIG_HISI_BYPASS_SSBS
+	if (this_cpu_has_cap(ARM64_SSBS)) {
+		required = false;
+		goto out_printmsg;
+	}
+#endif
+
+#ifndef CONFIG_ARCH_HISI
+	if (psci_ops.smccc_version == SMCCC_VERSION_1_0)
 		ssbd_state = ARM64_SSBD_UNKNOWN;
 		return false;
-	}
+	/*
+	 * The probe function return value is either negative
+	 * (unsupported or mitigated), positive (unaffected), or zero
+	 * (requires mitigation). We only need to do anything in the
+	 * last case.
+	 */
 
 	switch (psci_ops.conduit) {
+#else
+	switch (PSCI_CONDUIT_SMC) {
+#endif
 	case PSCI_CONDUIT_HVC:
 		arm_smccc_1_1_hvc(ARM_SMCCC_ARCH_FEATURES_FUNC_ID,
 				  ARM_SMCCC_ARCH_WORKAROUND_2, &res);
@@ -316,19 +347,22 @@ static bool has_ssbd_mitigation(const struct arm64_cpu_capabilities *entry,
 
 	switch (val) {
 	case SMCCC_RET_NOT_SUPPORTED:
+		pr_info("%s mitigation not supported\n", entry->desc);
 		ssbd_state = ARM64_SSBD_UNKNOWN;
 		return false;
 
 	case SMCCC_RET_NOT_REQUIRED:
-		pr_info_once("%s mitigation not required\n", entry->desc);
+		pr_info("%s mitigation not required,%d\n", entry->desc, val);
 		ssbd_state = ARM64_SSBD_MITIGATED;
 		return false;
 
 	case SMCCC_RET_SUCCESS:
+		pr_info("%s mitigation capable\n", entry->desc);
 		required = true;
 		break;
 
 	case 1:	/* Mitigation not required on this CPU */
+		pr_info("%s mitigation not required,%d\n", entry->desc, val);
 		required = false;
 		break;
 
@@ -339,26 +373,38 @@ static bool has_ssbd_mitigation(const struct arm64_cpu_capabilities *entry,
 
 	switch (ssbd_state) {
 	case ARM64_SSBD_FORCE_DISABLE:
-		pr_info_once("%s disabled from command-line\n", entry->desc);
 		arm64_set_ssbd_mitigation(false);
 		required = false;
 		break;
 
 	case ARM64_SSBD_KERNEL:
 		if (required) {
+			pr_info("%s kernel enabled\n", entry->desc);
 			__this_cpu_write(arm64_ssbd_callback_required, 1);
 			arm64_set_ssbd_mitigation(true);
 		}
 		break;
 
 	case ARM64_SSBD_FORCE_ENABLE:
-		pr_info_once("%s forced from command-line\n", entry->desc);
 		arm64_set_ssbd_mitigation(true);
 		required = true;
 		break;
 
 	default:
 		WARN_ON(1);
+		break;
+	}
+
+#ifndef CONFIG_HISI_BYPASS_SSBS
+out_printmsg:
+#endif
+	switch (ssbd_state) {
+	case ARM64_SSBD_FORCE_DISABLE:
+		pr_info_once("%s disabled from command-line\n", entry->desc);
+		break;
+
+	case ARM64_SSBD_FORCE_ENABLE:
+		pr_info_once("%s forced from command-line\n", entry->desc);
 		break;
 	}
 
@@ -453,14 +499,7 @@ const struct arm64_cpu_capabilities arm64_errata[] = {
 	{
 		.desc = "Mismatched cache line size",
 		.capability = ARM64_MISMATCHED_CACHE_LINE_SIZE,
-		.matches = has_mismatched_cache_type,
-		.def_scope = SCOPE_LOCAL_CPU,
-		.enable = cpu_enable_trap_ctr_access,
-	},
-	{
-		.desc = "Mismatched cache type",
-		.capability = ARM64_MISMATCHED_CACHE_TYPE,
-		.matches = has_mismatched_cache_type,
+		.matches = has_mismatched_cache_line_size,
 		.def_scope = SCOPE_LOCAL_CPU,
 		.enable = cpu_enable_trap_ctr_access,
 	},
@@ -495,12 +534,19 @@ const struct arm64_cpu_capabilities arm64_errata[] = {
 		MIDR_ALL_VERSIONS(MIDR_CAVIUM_THUNDERX2),
 		.enable = enable_smccc_arch_workaround_1,
 	},
+#ifdef CONFIG_ARCH_HISI
+	{
+		.capability = ARM64_HARDEN_BRANCH_PREDICTOR,
+		MIDR_ALL_VERSIONS(MIDR_CORTEX_ENYO),
+		.enable = enable_smccc_arch_workaround_1,
+	},
+#endif
 #endif
 #ifdef CONFIG_ARM64_SSBD
 	{
 		.desc = "Speculative Store Bypass Disable",
-		.def_scope = SCOPE_LOCAL_CPU,
 		.capability = ARM64_SSBD,
+		.def_scope = SCOPE_LOCAL_CPU,
 		.matches = has_ssbd_mitigation,
 	},
 #endif

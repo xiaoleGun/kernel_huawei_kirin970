@@ -58,6 +58,7 @@ enum {
 	POWER_SUPPLY_HEALTH_COLD,
 	POWER_SUPPLY_HEALTH_WATCHDOG_TIMER_EXPIRE,
 	POWER_SUPPLY_HEALTH_SAFETY_TIMER_EXPIRE,
+	POWER_SUPPLY_HEALTH_UNDERVOLTAGE,
 };
 
 enum {
@@ -95,6 +96,7 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_AUTHENTIC,
 	POWER_SUPPLY_PROP_TECHNOLOGY,
 	POWER_SUPPLY_PROP_CYCLE_COUNT,
+	POWER_SUPPLY_PROP_LIMIT_FCC,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX,
 	POWER_SUPPLY_PROP_VOLTAGE_MIN,
 	POWER_SUPPLY_PROP_VOLTAGE_MAX_DESIGN,
@@ -130,6 +132,8 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_ENERGY_NOW,
 	POWER_SUPPLY_PROP_ENERGY_AVG,
 	POWER_SUPPLY_PROP_CAPACITY, /* in percents! */
+	POWER_SUPPLY_PROP_CAPACITY_RM,
+	POWER_SUPPLY_PROP_CAPACITY_FCC,
 	POWER_SUPPLY_PROP_CAPACITY_ALERT_MIN, /* in percents! */
 	POWER_SUPPLY_PROP_CAPACITY_ALERT_MAX, /* in percents! */
 	POWER_SUPPLY_PROP_CAPACITY_LEVEL,
@@ -149,16 +153,23 @@ enum power_supply_property {
 	POWER_SUPPLY_PROP_SCOPE,
 	POWER_SUPPLY_PROP_CHARGE_TERM_CURRENT,
 	POWER_SUPPLY_PROP_CALIBRATE,
+	POWER_SUPPLY_PROP_ID_VOLTAGE,
 	/* Local extensions */
 	POWER_SUPPLY_PROP_USB_HC,
 	POWER_SUPPLY_PROP_USB_OTG,
 	POWER_SUPPLY_PROP_CHARGE_ENABLED,
 	/* Local extensions of type int64_t */
 	POWER_SUPPLY_PROP_CHARGE_COUNTER_EXT,
+	POWER_SUPPLY_PROP_FCP_STATUS,
+	POWER_SUPPLY_PROP_SCP_STATUS,
+	POWER_SUPPLY_PROP_BAT_OVP,
+	POWER_SUPPLY_PROP_CAPACITY_DEC,
+	POWER_SUPPLY_PROP_BAT_QMAX,
 	/* Properties of type `const char *' */
 	POWER_SUPPLY_PROP_MODEL_NAME,
 	POWER_SUPPLY_PROP_MANUFACTURER,
 	POWER_SUPPLY_PROP_SERIAL_NUMBER,
+	POWER_SUPPLY_PROP_BRAND,
 };
 
 enum power_supply_type {
@@ -173,6 +184,7 @@ enum power_supply_type {
 	POWER_SUPPLY_TYPE_USB_TYPE_C,	/* Type C Port */
 	POWER_SUPPLY_TYPE_USB_PD,	/* Power Delivery Port */
 	POWER_SUPPLY_TYPE_USB_PD_DRP,	/* PD Dual Role Port */
+	POWER_SUPPLY_TYPE_WIRELESS,
 };
 
 enum power_supply_notifier_events {
@@ -257,7 +269,6 @@ struct power_supply {
 	spinlock_t changed_lock;
 	bool changed;
 	bool initialized;
-	bool removing;
 	atomic_t use_cnt;
 #ifdef CONFIG_THERMAL
 	struct thermal_zone_device *tzd;
@@ -275,6 +286,14 @@ struct power_supply {
 	char *online_trig_name;
 	struct led_trigger *charging_blink_full_solid_trig;
 	char *charging_blink_full_solid_trig_name;
+#endif
+
+#ifdef CONFIG_HISI_THERMAL_TRIP
+	int	trip_num;
+	int	trip_mask;
+	s32	temp_throttling;
+	s32	temp_shutdown;
+	s32	temp_below_vr_min;
 #endif
 };
 

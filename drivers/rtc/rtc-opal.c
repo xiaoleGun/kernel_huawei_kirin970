@@ -57,8 +57,7 @@ static void tm_to_opal(struct rtc_time *tm, u32 *y_m_d, u64 *h_m_s_ms)
 
 static int opal_get_rtc_time(struct device *dev, struct rtc_time *tm)
 {
-	s64 rc = OPAL_BUSY;
-	int retries = 10;
+	long rc = OPAL_BUSY;
 	u32 y_m_d;
 	u64 h_m_s_ms;
 	__be32 __y_m_d;
@@ -66,17 +65,10 @@ static int opal_get_rtc_time(struct device *dev, struct rtc_time *tm)
 
 	while (rc == OPAL_BUSY || rc == OPAL_BUSY_EVENT) {
 		rc = opal_rtc_read(&__y_m_d, &__h_m_s_ms);
-		if (rc == OPAL_BUSY_EVENT) {
-			msleep(OPAL_BUSY_DELAY_MS);
+		if (rc == OPAL_BUSY_EVENT)
 			opal_poll_events(NULL);
-		} else if (rc == OPAL_BUSY) {
-			msleep(OPAL_BUSY_DELAY_MS);
-		} else if (rc == OPAL_HARDWARE || rc == OPAL_INTERNAL_ERROR) {
-			if (retries--) {
-				msleep(10); /* Wait 10ms before retry */
-				rc = OPAL_BUSY; /* go around again */
-			}
-		}
+		else
+			msleep(10);
 	}
 
 	if (rc != OPAL_SUCCESS)
@@ -91,26 +83,17 @@ static int opal_get_rtc_time(struct device *dev, struct rtc_time *tm)
 
 static int opal_set_rtc_time(struct device *dev, struct rtc_time *tm)
 {
-	s64 rc = OPAL_BUSY;
-	int retries = 10;
+	long rc = OPAL_BUSY;
 	u32 y_m_d = 0;
 	u64 h_m_s_ms = 0;
 
 	tm_to_opal(tm, &y_m_d, &h_m_s_ms);
-
 	while (rc == OPAL_BUSY || rc == OPAL_BUSY_EVENT) {
 		rc = opal_rtc_write(y_m_d, h_m_s_ms);
-		if (rc == OPAL_BUSY_EVENT) {
-			msleep(OPAL_BUSY_DELAY_MS);
+		if (rc == OPAL_BUSY_EVENT)
 			opal_poll_events(NULL);
-		} else if (rc == OPAL_BUSY) {
-			msleep(OPAL_BUSY_DELAY_MS);
-		} else if (rc == OPAL_HARDWARE || rc == OPAL_INTERNAL_ERROR) {
-			if (retries--) {
-				msleep(10); /* Wait 10ms before retry */
-				rc = OPAL_BUSY; /* go around again */
-			}
-		}
+		else
+			msleep(10);
 	}
 
 	return rc == OPAL_SUCCESS ? 0 : -EIO;
@@ -159,16 +142,6 @@ static int opal_get_tpo_time(struct device *dev, struct rtc_wkalrm *alarm)
 
 	y_m_d = be32_to_cpu(__y_m_d);
 	h_m_s_ms = ((u64)be32_to_cpu(__h_m) << 32);
-
-	/* check if no alarm is set */
-	if (y_m_d == 0 && h_m_s_ms == 0) {
-		pr_debug("No alarm is set\n");
-		rc = -ENOENT;
-		goto exit;
-	} else {
-		pr_debug("Alarm set to %x %llx\n", y_m_d, h_m_s_ms);
-	}
-
 	opal_to_tm(y_m_d, h_m_s_ms, &alarm->time);
 
 exit:

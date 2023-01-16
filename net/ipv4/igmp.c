@@ -107,6 +107,7 @@
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 #endif
+#include <linux/rcupdate.h>
 
 #ifdef CONFIG_IP_MULTICAST
 /* Parameter names and values are taken from igmp-v2-06 draft */
@@ -1847,7 +1848,7 @@ static int ip_mc_del1_src(struct ip_mc_list *pmc, int sfmode,
 			rv = 1;
 		} else
 #endif
-			kfree(psf);
+			kfree_rcu(psf, rcu_head);
 	}
 	return rv;
 }

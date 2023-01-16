@@ -135,11 +135,11 @@ vmlinux_link()
 	local objects
 
 	if [ "${SRCARCH}" != "um" ]; then
-		local ld=${LD}
+		local ld="${LD}"
 		local ldflags="${LDFLAGS} ${LDFLAGS_vmlinux}"
 
 		if [ -n "${LDFINAL_vmlinux}" ]; then
-			ld=${LDFINAL_vmlinux}
+			ld="${LDFINAL_vmlinux}"
 			ldflags="${LDFLAGS_FINAL_vmlinux} ${LDFLAGS_vmlinux}"
 		fi
 
@@ -200,9 +200,42 @@ kallsyms()
 
 	local afile="`basename ${2} .o`.S"
 
-	${NM} -n ${1} | scripts/kallsyms ${kallsymopt} > ${afile}
-	${CC} ${aflags} -c -o ${2} ${afile}
+	if [ -n "${CONFIG_HUAWEI_HIDESYMS}" ]; then
+		local src_blacklist="$(cd `dirname $0`; pwd)/hw_hidesyms_blacklist.txt"
+		local tmp_blacklist=".tmp_hw_hidesyms_blacklist.txt"
+		local debug_blacklist="debug_hw_hidesyms_blacklist.log"
+
+		# Delete the debug file if exist.
+		if [ -f "${debug_blacklist}" ]; then
+			rm ${debug_blacklist}
+		fi
+
+		# Get a pure blacklist
+		cat ${src_blacklist} | sed s/[[:space:]]//g | grep -v "#" | \
+			sed -e '/^$/d' > ${tmp_blacklist}
+
+		if [ -s "${tmp_blacklist}" ]; then
+			# Generate debug log
+			if [ -n "${CONFIG_HUAWEI_HIDESYMS_DEBUGFS}" ]; then
+				${NM} -n ${1} | grep -w -f ${tmp_blacklist} > ${debug_blacklist}
+			fi
+
+			${NM} -n ${1} | \
+				grep -vw -f ${tmp_blacklist} | \
+				scripts/kallsyms ${kallsymopt} > ${afile}
+			${CC} ${aflags} -c -o ${2} ${afile}
+		else
+			${NM} -n ${1} | scripts/kallsyms ${kallsymopt} > ${afile}
+			${CC} ${aflags} -c -o ${2} ${afile}
+		fi
+
+		rm ${tmp_blacklist}
+	else
+		${NM} -n ${1} | scripts/kallsyms ${kallsymopt} > ${afile}
+		${CC} ${aflags} -c -o ${2} ${afile}
+	fi
 }
+
 
 # Create map file with all symbols from ${1}
 # See mksymap for additional details

@@ -690,9 +690,8 @@ lpfc_work_done(struct lpfc_hba *phba)
 	    (phba->hba_flag & HBA_SP_QUEUE_EVT)) {
 		if (pring->flag & LPFC_STOP_IOCB_EVENT) {
 			pring->flag |= LPFC_DEFERRED_RING_EVENT;
-			/* Preserve legacy behavior. */
-			if (!(phba->hba_flag & HBA_SP_QUEUE_EVT))
-				set_bit(LPFC_DATA_READY, &phba->data_flags);
+			/* Set the lpfc data pending flag */
+			set_bit(LPFC_DATA_READY, &phba->data_flags);
 		} else {
 			if (phba->link_state >= LPFC_LINK_UP) {
 				pring->flag &= ~LPFC_DEFERRED_RING_EVENT;

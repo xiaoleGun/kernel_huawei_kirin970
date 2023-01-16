@@ -29,6 +29,7 @@
 #include <sound/minors.h>
 #include <sound/info.h>
 #include <sound/control.h>
+#include <asm/ptrace.h>
 
 /* max number of user-defined controls */
 #define MAX_USER_CONTROLS	32
@@ -346,40 +347,6 @@ static int snd_ctl_find_hole(struct snd_card *card, unsigned int count)
 	return 0;
 }
 
-/* add a new kcontrol object; call with card->controls_rwsem locked */
-static int __snd_ctl_add(struct snd_card *card, struct snd_kcontrol *kcontrol)
-{
-	struct snd_ctl_elem_id id;
-	unsigned int idx;
-	unsigned int count;
-
-	id = kcontrol->id;
-	if (id.index > UINT_MAX - kcontrol->count)
-		return -EINVAL;
-
-	if (snd_ctl_find_id(card, &id)) {
-		dev_err(card->dev,
-			"control %i:%i:%i:%s:%i is already present\n",
-			id.iface, id.device, id.subdevice, id.name, id.index);
-		return -EBUSY;
-	}
-
-	if (snd_ctl_find_hole(card, kcontrol->count) < 0)
-		return -ENOMEM;
-
-	list_add_tail(&kcontrol->list, &card->controls);
-	card->controls_count += kcontrol->count;
-	kcontrol->id.numid = card->last_numid + 1;
-	card->last_numid += kcontrol->count;
-
-	id = kcontrol->id;
-	count = kcontrol->count;
-	for (idx = 0; idx < count; idx++, id.index++, id.numid++)
-		snd_ctl_notify(card, SNDRV_CTL_EVENT_MASK_ADD, &id);
-
-	return 0;
-}
-
 /**
  * snd_ctl_add - add the control instance to the card
  * @card: the card instance
@@ -396,18 +363,45 @@ static int __snd_ctl_add(struct snd_card *card, struct snd_kcontrol *kcontrol)
  */
 int snd_ctl_add(struct snd_card *card, struct snd_kcontrol *kcontrol)
 {
+	struct snd_ctl_elem_id id;
+	unsigned int idx;
+	unsigned int count;
 	int err = -EINVAL;
 
 	if (! kcontrol)
 		return err;
 	if (snd_BUG_ON(!card || !kcontrol->info))
 		goto error;
+	id = kcontrol->id;
+	if (id.index > UINT_MAX - kcontrol->count)
+		goto error;
 
 	down_write(&card->controls_rwsem);
-	err = __snd_ctl_add(card, kcontrol);
-	up_write(&card->controls_rwsem);
-	if (err < 0)
+	if (snd_ctl_find_id(card, &id)) {
+		up_write(&card->controls_rwsem);
+		dev_err(card->dev, "control %i:%i:%i:%s:%i is already present\n",
+					id.iface,
+					id.device,
+					id.subdevice,
+					id.name,
+					id.index);
+		err = -EBUSY;
 		goto error;
+	}
+	if (snd_ctl_find_hole(card, kcontrol->count) < 0) {
+		up_write(&card->controls_rwsem);
+		err = -ENOMEM;
+		goto error;
+	}
+	list_add_tail(&kcontrol->list, &card->controls);
+	card->controls_count += kcontrol->count;
+	kcontrol->id.numid = card->last_numid + 1;
+	card->last_numid += kcontrol->count;
+	id = kcontrol->id;
+	count = kcontrol->count;
+	up_write(&card->controls_rwsem);
+	for (idx = 0; idx < count; idx++, id.index++, id.numid++)
+		snd_ctl_notify(card, SNDRV_CTL_EVENT_MASK_ADD, &id);
 	return 0;
 
  error:
@@ -677,7 +671,7 @@ struct snd_kcontrol *snd_ctl_find_numid(struct snd_card *card, unsigned int numi
 	if (snd_BUG_ON(!card || !numid))
 		return NULL;
 	list_for_each_entry(kctl, &card->controls, list) {
-		if (kctl->id.numid <= numid && kctl->id.numid + kctl->count > numid)
+		if (kctl != NULL && kctl->id.numid <= numid && kctl->id.numid + kctl->count > numid)
 			return kctl;
 	}
 	return NULL;
@@ -778,6 +772,14 @@ static int snd_ctl_elem_list(struct snd_card *card,
 			if (offset == 0)
 				break;
 			kctl = snd_kcontrol(plist);
+			if (kctl == NULL) {
+				pr_err("[%s:%d] kctl is NULL!\n", __func__, __LINE__);
+				dump_stack();
+
+				up_read(&card->controls_rwsem);
+				vfree(dst);
+				return -EFAULT;
+			}
 			if (offset < kctl->count)
 				break;
 			offset -= kctl->count;
@@ -787,6 +789,14 @@ static int snd_ctl_elem_list(struct snd_card *card,
 		id = dst;
 		while (space > 0 && plist != &card->controls) {
 			kctl = snd_kcontrol(plist);
+			if (kctl == NULL) {
+				pr_err("[%s:%d] kctl is NULL!\n", __func__, __LINE__);
+				dump_stack();
+
+				up_read(&card->controls_rwsem);
+				vfree(dst);
+				return -EFAULT;
+			}
 			for (jidx = offset; space > 0 && jidx < kctl->count; jidx++) {
 				snd_ctl_build_ioff(id, kctl, jidx);
 				id++;
@@ -1361,12 +1371,9 @@ static int snd_ctl_elem_add(struct snd_ctl_file *file,
 		kctl->tlv.c = snd_ctl_elem_user_tlv;
 
 	/* This function manage to free the instance on failure. */
-	down_write(&card->controls_rwsem);
-	err = __snd_ctl_add(card, kctl);
-	if (err < 0) {
-		snd_ctl_free_one(kctl);
-		goto unlock;
-	}
+	err = snd_ctl_add(card, kctl);
+	if (err < 0)
+		return err;
 	offset = snd_ctl_get_ioff(kctl, &info->id);
 	snd_ctl_build_ioff(&info->id, kctl, offset);
 	/*
@@ -1377,10 +1384,10 @@ static int snd_ctl_elem_add(struct snd_ctl_file *file,
 	 * which locks the element.
 	 */
 
+	down_write(&card->controls_rwsem);
 	card->user_ctl_count++;
-
- unlock:
 	up_write(&card->controls_rwsem);
+
 	return 0;
 }
 

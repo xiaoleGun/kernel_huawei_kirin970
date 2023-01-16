@@ -148,7 +148,7 @@ struct console {
 extern int console_set_on_cmdline;
 extern struct console *early_console;
 
-extern int add_preferred_console(char *name, int idx, char *options);
+extern int add_preferred_console(const char *name, int idx, char *options);
 extern void register_console(struct console *);
 extern int unregister_console(struct console *);
 extern struct console *console_drivers;

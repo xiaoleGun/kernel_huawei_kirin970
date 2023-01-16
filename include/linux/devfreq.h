@@ -308,6 +308,9 @@ struct devfreq_passive_data {
 };
 #endif
 
+#ifdef CONFIG_ARCH_HISI
+void devfreq_apply_limits(struct devfreq *devfreq);
+#endif
 #else /* !CONFIG_PM_DEVFREQ */
 static inline struct devfreq *devfreq_add_device(struct device *dev,
 					  struct devfreq_dev_profile *profile,

@@ -25,7 +25,6 @@
 #include <asm/kvm_emulate.h>
 #include <linux/stringify.h>
 #include <asm/debugreg.h>
-#include <asm/nospec-branch.h>
 
 #include "x86.h"
 #include "tss.h"
@@ -802,19 +801,6 @@ static inline int jmp_rel(struct x86_emulate_ctxt *ctxt, int rel)
 	return assign_eip_near(ctxt, ctxt->_eip + rel);
 }
 
-static int linear_read_system(struct x86_emulate_ctxt *ctxt, ulong linear,
-			      void *data, unsigned size)
-{
-	return ctxt->ops->read_std(ctxt, linear, data, size, &ctxt->exception, true);
-}
-
-static int linear_write_system(struct x86_emulate_ctxt *ctxt,
-			       ulong linear, void *data,
-			       unsigned int size)
-{
-	return ctxt->ops->write_std(ctxt, linear, data, size, &ctxt->exception, true);
-}
-
 static int segmented_read_std(struct x86_emulate_ctxt *ctxt,
 			      struct segmented_address addr,
 			      void *data,
@@ -826,7 +812,7 @@ static int segmented_read_std(struct x86_emulate_ctxt *ctxt,
 	rc = linearize(ctxt, addr, size, false, &linear);
 	if (rc != X86EMUL_CONTINUE)
 		return rc;
-	return ctxt->ops->read_std(ctxt, linear, data, size, &ctxt->exception, false);
+	return ctxt->ops->read_std(ctxt, linear, data, size, &ctxt->exception);
 }
 
 static int segmented_write_std(struct x86_emulate_ctxt *ctxt,
@@ -840,7 +826,7 @@ static int segmented_write_std(struct x86_emulate_ctxt *ctxt,
 	rc = linearize(ctxt, addr, size, true, &linear);
 	if (rc != X86EMUL_CONTINUE)
 		return rc;
-	return ctxt->ops->write_std(ctxt, linear, data, size, &ctxt->exception, false);
+	return ctxt->ops->write_std(ctxt, linear, data, size, &ctxt->exception);
 }
 
 /*
@@ -1026,8 +1012,8 @@ static __always_inline u8 test_cc(unsigned int condition, unsigned long flags)
 	void (*fop)(void) = (void *)em_setcc + 4 * (condition & 0xf);
 
 	flags = (flags & EFLAGS_MASK) | X86_EFLAGS_IF;
-	asm("push %[flags]; popf; " CALL_NOSPEC
-	    : "=a"(rc) : [thunk_target]"r"(fop), [flags]"r"(flags));
+	asm("push %[flags]; popf; call *%[fastop]"
+	    : "=a"(rc) : [fastop]"r"(fop), [flags]"r"(flags));
 	return rc;
 }
 
@@ -1513,7 +1499,8 @@ static int read_interrupt_descriptor(struct x86_emulate_ctxt *ctxt,
 		return emulate_gp(ctxt, index << 3 | 0x2);
 
 	addr = dt.address + index * 8;
-	return linear_read_system(ctxt, addr, desc, sizeof *desc);
+	return ctxt->ops->read_std(ctxt, addr, desc, sizeof *desc,
+				   &ctxt->exception);
 }
 
 static void get_descriptor_table_ptr(struct x86_emulate_ctxt *ctxt,
@@ -1576,7 +1563,8 @@ static int read_segment_descriptor(struct x86_emulate_ctxt *ctxt,
 	if (rc != X86EMUL_CONTINUE)
 		return rc;
 
-	return linear_read_system(ctxt, *desc_addr_p, desc, sizeof(*desc));
+	return ctxt->ops->read_std(ctxt, *desc_addr_p, desc, sizeof(*desc),
+				   &ctxt->exception);
 }
 
 /* allowed just for 8 bytes segments */
@@ -1590,7 +1578,8 @@ static int write_segment_descriptor(struct x86_emulate_ctxt *ctxt,
 	if (rc != X86EMUL_CONTINUE)
 		return rc;
 
-	return linear_write_system(ctxt, addr, desc, sizeof *desc);
+	return ctxt->ops->write_std(ctxt, addr, desc, sizeof *desc,
+				    &ctxt->exception);
 }
 
 static int __load_segment_descriptor(struct x86_emulate_ctxt *ctxt,
@@ -1751,7 +1740,8 @@ static int __load_segment_descriptor(struct x86_emulate_ctxt *ctxt,
 				return ret;
 		}
 	} else if (ctxt->mode == X86EMUL_MODE_PROT64) {
-		ret = linear_read_system(ctxt, desc_addr+8, &base3, sizeof(base3));
+		ret = ctxt->ops->read_std(ctxt, desc_addr+8, &base3,
+				sizeof(base3), &ctxt->exception);
 		if (ret != X86EMUL_CONTINUE)
 			return ret;
 		if (is_noncanonical_address(get_desc_base(&seg_desc) |
@@ -2064,11 +2054,11 @@ static int __emulate_int_real(struct x86_emulate_ctxt *ctxt, int irq)
 	eip_addr = dt.address + (irq << 2);
 	cs_addr = dt.address + (irq << 2) + 2;
 
-	rc = linear_read_system(ctxt, cs_addr, &cs, 2);
+	rc = ops->read_std(ctxt, cs_addr, &cs, 2, &ctxt->exception);
 	if (rc != X86EMUL_CONTINUE)
 		return rc;
 
-	rc = linear_read_system(ctxt, eip_addr, &eip, 2);
+	rc = ops->read_std(ctxt, eip_addr, &eip, 2, &ctxt->exception);
 	if (rc != X86EMUL_CONTINUE)
 		return rc;
 
@@ -2912,12 +2902,12 @@ static bool emulator_io_port_access_allowed(struct x86_emulate_ctxt *ctxt,
 #ifdef CONFIG_X86_64
 	base |= ((u64)base3) << 32;
 #endif
-	r = ops->read_std(ctxt, base + 102, &io_bitmap_ptr, 2, NULL, true);
+	r = ops->read_std(ctxt, base + 102, &io_bitmap_ptr, 2, NULL);
 	if (r != X86EMUL_CONTINUE)
 		return false;
 	if (io_bitmap_ptr + port/8 > desc_limit_scaled(&tr_seg))
 		return false;
-	r = ops->read_std(ctxt, base + io_bitmap_ptr + port/8, &perm, 2, NULL, true);
+	r = ops->read_std(ctxt, base + io_bitmap_ptr + port/8, &perm, 2, NULL);
 	if (r != X86EMUL_CONTINUE)
 		return false;
 	if ((perm >> bit_idx) & mask)
@@ -3046,30 +3036,35 @@ static int task_switch_16(struct x86_emulate_ctxt *ctxt,
 			  u16 tss_selector, u16 old_tss_sel,
 			  ulong old_tss_base, struct desc_struct *new_desc)
 {
+	const struct x86_emulate_ops *ops = ctxt->ops;
 	struct tss_segment_16 tss_seg;
 	int ret;
 	u32 new_tss_base = get_desc_base(new_desc);
 
-	ret = linear_read_system(ctxt, old_tss_base, &tss_seg, sizeof tss_seg);
+	ret = ops->read_std(ctxt, old_tss_base, &tss_seg, sizeof tss_seg,
+			    &ctxt->exception);
 	if (ret != X86EMUL_CONTINUE)
 		return ret;
 
 	save_state_to_tss16(ctxt, &tss_seg);
 
-	ret = linear_write_system(ctxt, old_tss_base, &tss_seg, sizeof tss_seg);
+	ret = ops->write_std(ctxt, old_tss_base, &tss_seg, sizeof tss_seg,
+			     &ctxt->exception);
 	if (ret != X86EMUL_CONTINUE)
 		return ret;
 
-	ret = linear_read_system(ctxt, new_tss_base, &tss_seg, sizeof tss_seg);
+	ret = ops->read_std(ctxt, new_tss_base, &tss_seg, sizeof tss_seg,
+			    &ctxt->exception);
 	if (ret != X86EMUL_CONTINUE)
 		return ret;
 
 	if (old_tss_sel != 0xffff) {
 		tss_seg.prev_task_link = old_tss_sel;
 
-		ret = linear_write_system(ctxt, new_tss_base,
-					  &tss_seg.prev_task_link,
-					  sizeof tss_seg.prev_task_link);
+		ret = ops->write_std(ctxt, new_tss_base,
+				     &tss_seg.prev_task_link,
+				     sizeof tss_seg.prev_task_link,
+				     &ctxt->exception);
 		if (ret != X86EMUL_CONTINUE)
 			return ret;
 	}
@@ -3185,34 +3180,38 @@ static int task_switch_32(struct x86_emulate_ctxt *ctxt,
 			  u16 tss_selector, u16 old_tss_sel,
 			  ulong old_tss_base, struct desc_struct *new_desc)
 {
+	const struct x86_emulate_ops *ops = ctxt->ops;
 	struct tss_segment_32 tss_seg;
 	int ret;
 	u32 new_tss_base = get_desc_base(new_desc);
 	u32 eip_offset = offsetof(struct tss_segment_32, eip);
 	u32 ldt_sel_offset = offsetof(struct tss_segment_32, ldt_selector);
 
-	ret = linear_read_system(ctxt, old_tss_base, &tss_seg, sizeof tss_seg);
+	ret = ops->read_std(ctxt, old_tss_base, &tss_seg, sizeof tss_seg,
+			    &ctxt->exception);
 	if (ret != X86EMUL_CONTINUE)
 		return ret;
 
 	save_state_to_tss32(ctxt, &tss_seg);
 
 	/* Only GP registers and segment selectors are saved */
-	ret = linear_write_system(ctxt, old_tss_base + eip_offset, &tss_seg.eip,
-				  ldt_sel_offset - eip_offset);
+	ret = ops->write_std(ctxt, old_tss_base + eip_offset, &tss_seg.eip,
+			     ldt_sel_offset - eip_offset, &ctxt->exception);
 	if (ret != X86EMUL_CONTINUE)
 		return ret;
 
-	ret = linear_read_system(ctxt, new_tss_base, &tss_seg, sizeof tss_seg);
+	ret = ops->read_std(ctxt, new_tss_base, &tss_seg, sizeof tss_seg,
+			    &ctxt->exception);
 	if (ret != X86EMUL_CONTINUE)
 		return ret;
 
 	if (old_tss_sel != 0xffff) {
 		tss_seg.prev_task_link = old_tss_sel;
 
-		ret = linear_write_system(ctxt, new_tss_base,
-					  &tss_seg.prev_task_link,
-					  sizeof tss_seg.prev_task_link);
+		ret = ops->write_std(ctxt, new_tss_base,
+				     &tss_seg.prev_task_link,
+				     sizeof tss_seg.prev_task_link,
+				     &ctxt->exception);
 		if (ret != X86EMUL_CONTINUE)
 			return ret;
 	}
@@ -4991,8 +4990,6 @@ int x86_decode_insn(struct x86_emulate_ctxt *ctxt, void *insn, int insn_len)
 	bool op_prefix = false;
 	bool has_seg_override = false;
 	struct opcode opcode;
-	u16 dummy;
-	struct desc_struct desc;
 
 	ctxt->memop.type = OP_NONE;
 	ctxt->memopp = NULL;
@@ -5011,11 +5008,6 @@ int x86_decode_insn(struct x86_emulate_ctxt *ctxt, void *insn, int insn_len)
 	switch (mode) {
 	case X86EMUL_MODE_REAL:
 	case X86EMUL_MODE_VM86:
-		def_op_bytes = def_ad_bytes = 2;
-		ctxt->ops->get_segment(ctxt, &dummy, &desc, NULL, VCPU_SREG_CS);
-		if (desc.d)
-			def_op_bytes = def_ad_bytes = 4;
-		break;
 	case X86EMUL_MODE_PROT16:
 		def_op_bytes = def_ad_bytes = 2;
 		break;
@@ -5312,9 +5304,9 @@ static int fastop(struct x86_emulate_ctxt *ctxt, void (*fop)(struct fastop *))
 	if (!(ctxt->d & ByteOp))
 		fop += __ffs(ctxt->dst.bytes) * FASTOP_SIZE;
 
-	asm("push %[flags]; popf; " CALL_NOSPEC " ; pushf; pop %[flags]\n"
+	asm("push %[flags]; popf; call *%[fastop]; pushf; pop %[flags]\n"
 	    : "+a"(ctxt->dst.val), "+d"(ctxt->src.val), [flags]"+D"(flags),
-	      [thunk_target]"+S"(fop), ASM_CALL_CONSTRAINT
+	      [fastop]"+S"(fop), ASM_CALL_CONSTRAINT
 	    : "c"(ctxt->src2.val));
 
 	ctxt->eflags = (ctxt->eflags & ~EFLAGS_MASK) | (flags & EFLAGS_MASK);

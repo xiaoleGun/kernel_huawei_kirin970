@@ -884,28 +884,14 @@ static int sccnxp_probe(struct platform_device *pdev)
 
 	clk = devm_clk_get(&pdev->dev, NULL);
 	if (IS_ERR(clk)) {
-		ret = PTR_ERR(clk);
-		if (ret == -EPROBE_DEFER)
+		if (PTR_ERR(clk) == -EPROBE_DEFER) {
+			ret = -EPROBE_DEFER;
 			goto err_out;
-		uartclk = 0;
-	} else {
-		ret = clk_prepare_enable(clk);
-		if (ret)
-			goto err_out;
-
-		ret = devm_add_action_or_reset(&pdev->dev,
-				(void(*)(void *))clk_disable_unprepare,
-				clk);
-		if (ret)
-			goto err_out;
-
-		uartclk = clk_get_rate(clk);
-	}
-
-	if (!uartclk) {
+		}
 		dev_notice(&pdev->dev, "Using default clock frequency\n");
 		uartclk = s->chip->freq_std;
-	}
+	} else
+		uartclk = clk_get_rate(clk);
 
 	/* Check input frequency */
 	if ((uartclk < s->chip->freq_min) || (uartclk > s->chip->freq_max)) {
@@ -997,7 +983,7 @@ static int sccnxp_probe(struct platform_device *pdev)
 	uart_unregister_driver(&s->uart);
 err_out:
 	if (!IS_ERR(s->regulator))
-		regulator_disable(s->regulator);
+		return regulator_disable(s->regulator);
 
 	return ret;
 }

@@ -47,6 +47,13 @@
 #include <net/raw.h>
 
 #define TCPUDP_MIB_MAX max_t(u32, UDP_MIB_MAX, TCP_MIB_MAX)
+#ifndef CONFIG_HW_WIFIPRO
+#undef CONFIG_HW_WIFIPRO_PROC
+#endif
+
+#ifdef CONFIG_HW_WIFIPRO_PROC
+#include <hwnet/ipv4/wifipro_tcp_monitor.h>
+#endif
 
 /*
  *	Report socket allocation statistics [mea@utu.fi]
@@ -54,6 +61,7 @@
 static int sockstat_seq_show(struct seq_file *seq, void *v)
 {
 	struct net *net = seq->private;
+	unsigned int frag_mem;
 	int orphans, sockets;
 
 	local_bh_disable();
@@ -73,9 +81,8 @@ static int sockstat_seq_show(struct seq_file *seq, void *v)
 		   sock_prot_inuse_get(net, &udplite_prot));
 	seq_printf(seq, "RAW: inuse %d\n",
 		   sock_prot_inuse_get(net, &raw_prot));
-	seq_printf(seq,  "FRAG: inuse %u memory %lu\n",
-		   atomic_read(&net->ipv4.frags.rhashtable.nelems),
-		   frag_mem_limit(&net->ipv4.frags));
+	frag_mem = ip_frag_mem(net);
+	seq_printf(seq,  "FRAG: inuse %u memory %u\n", !!frag_mem, frag_mem);
 	return 0;
 }
 
@@ -134,7 +141,6 @@ static const struct snmp_mib snmp4_ipextstats_list[] = {
 	SNMP_MIB_ITEM("InECT1Pkts", IPSTATS_MIB_ECT1PKTS),
 	SNMP_MIB_ITEM("InECT0Pkts", IPSTATS_MIB_ECT0PKTS),
 	SNMP_MIB_ITEM("InCEPkts", IPSTATS_MIB_CEPKTS),
-	SNMP_MIB_ITEM("ReasmOverlaps", IPSTATS_MIB_REASM_OVERLAPS),
 	SNMP_MIB_SENTINEL
 };
 
@@ -540,6 +546,12 @@ static __net_init int ip_proc_init_net(struct net *net)
 		goto out_netstat;
 	if (!proc_create("snmp", S_IRUGO, net->proc_net, &snmp_seq_fops))
 		goto out_snmp;
+#ifdef CONFIG_HW_WIFIPRO_PROC
+	if (wifipro_init_proc(net)) {
+		WIFIPRO_WARNING("wifipro_init_proc fail!");
+	}
+#endif
+
 
 	return 0;
 

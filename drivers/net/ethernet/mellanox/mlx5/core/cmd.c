@@ -784,7 +784,6 @@ static void cmd_work_handler(struct work_struct *work)
 	struct semaphore *sem;
 	unsigned long flags;
 	int alloc_ret;
-	int cmd_mode;
 
 	sem = ent->page_queue ? &cmd->pages_sem : &cmd->sem;
 	down(sem);
@@ -831,7 +830,6 @@ static void cmd_work_handler(struct work_struct *work)
 	set_signature(ent, !cmd->checksum_disabled);
 	dump_command(dev, ent, 1);
 	ent->ts1 = ktime_get_ns();
-	cmd_mode = cmd->mode;
 
 	if (ent->callback)
 		schedule_delayed_work(&ent->cb_timeout_work, cb_timeout);
@@ -856,7 +854,7 @@ static void cmd_work_handler(struct work_struct *work)
 	iowrite32be(1 << ent->idx, &dev->iseg->cmd_dbell);
 	mmiowb();
 	/* if not in polling don't use ent after this point */
-	if (cmd_mode == CMD_MODE_POLLING) {
+	if (cmd->mode == CMD_MODE_POLLING) {
 		poll_timeout(ent);
 		/* make sure we read the descriptor after ownership is SW */
 		rmb();
@@ -965,7 +963,7 @@ static int mlx5_cmd_invoke(struct mlx5_core_dev *dev, struct mlx5_cmd_msg *in,
 
 	err = wait_func(dev, ent);
 	if (err == -ETIMEDOUT)
-		goto out;
+		goto out_free;
 
 	ds = ent->ts2 - ent->ts1;
 	op = MLX5_GET(mbox_in, in->first.data, opcode);
@@ -1258,7 +1256,7 @@ static ssize_t outlen_write(struct file *filp, const char __user *buf,
 {
 	struct mlx5_core_dev *dev = filp->private_data;
 	struct mlx5_cmd_debug *dbg = &dev->cmd.dbg;
-	char outlen_str[8] = {0};
+	char outlen_str[8];
 	int outlen;
 	void *ptr;
 	int err;
@@ -1272,6 +1270,8 @@ static ssize_t outlen_write(struct file *filp, const char __user *buf,
 
 	if (copy_from_user(outlen_str, buf, count))
 		return -EFAULT;
+
+	outlen_str[7] = 0;
 
 	err = sscanf(outlen_str, "%d", &outlen);
 	if (err < 0)
@@ -1428,7 +1428,6 @@ void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, bool forced)
 					mlx5_core_err(dev, "Command completion arrived after timeout (entry idx = %d).\n",
 						      ent->idx);
 					free_ent(cmd, ent->idx);
-					free_cmd(ent);
 				}
 				continue;
 			}
@@ -1487,8 +1486,7 @@ void mlx5_cmd_comp_handler(struct mlx5_core_dev *dev, u64 vec, bool forced)
 				free_msg(dev, ent->in);
 
 				err = err ? err : ent->status;
-				if (!forced)
-					free_cmd(ent);
+				free_cmd(ent);
 				callback(err, context);
 			} else {
 				complete(&ent->done);
@@ -1767,7 +1765,7 @@ int mlx5_cmd_init(struct mlx5_core_dev *dev)
 
 	cmd->checksum_disabled = 1;
 	cmd->max_reg_cmds = (1 << cmd->log_sz) - 1;
-	cmd->bitmask = (1UL << cmd->max_reg_cmds) - 1;
+	cmd->bitmask = (1 << cmd->max_reg_cmds) - 1;
 
 	cmd->cmdif_rev = ioread32be(&dev->iseg->cmdif_rev_fw_sub) >> 16;
 	if (cmd->cmdif_rev > CMD_IF_REV) {

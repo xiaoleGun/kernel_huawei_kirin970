@@ -1,3 +1,18 @@
+ifeq ($(CONFIG_HI6402_MBHC_ANC),y)
+EXTRA_CFLAGS +=	-DANC_HEADSET
+endif
+EXTRA_CFLAGS += -I$(src)/hisi/hs_auto_calib/
+EXTRA_CFLAGS += -Idrivers/hisi/hi64xx_dsp/
+EXTRA_CFLAGS +=	-Idrivers/hisi/slimbus/
+
+ifeq ($(CONFIG_HISI_AUDIO_DEBUG),y)
+EXTRA_CFLAGS += -DHI6XXX_FPGA_TEST
+endif
+
+ifeq ($(TARGET_VERSION_MODE),factory)
+EXTRA_CFLAGS += -DAUDIO_FACTORY_MODE
+endif
+
 snd-soc-88pm860x-objs := 88pm860x-codec.o
 snd-soc-ab8500-codec-objs := ab8500-codec.o
 snd-soc-ac97-objs := ac97.o
@@ -215,11 +230,35 @@ snd-soc-wm9712-objs := wm9712.o
 snd-soc-wm9713-objs := wm9713.o
 snd-soc-wm-hubs-objs := wm_hubs.o
 
+snd-soc-hi6402-objs := hisi/hi6402.o
+snd-soc-hi6403-objs := hisi/hi6403.o
+snd-soc-hi6402es-objs := hisi/hi6402es.o
+snd-soc-hdmi-audio-objs := hisi/hdmi-audio.o
+snd-soc-dp-audio-objs := hisi/dp_audio.o
+# hi6555c codec
+obj-y += hisi/hs_auto_calib/
+snd-soc-hi6555c-objs :=hisi/hi6555c.o
 # Amp
 snd-soc-max9877-objs := max9877.o
 snd-soc-max98504-objs := max98504.o
 snd-soc-tpa6130a2-objs := tpa6130a2.o
 snd-soc-tas2552-objs := tas2552.o
+ifneq ($(TARGET_BUILD_VARIANT),user)
+	EXTRA_CFLAGS += -Idrivers/devkit/audiokit/headset_debug
+	EXTRA_CFLAGS += -DCONFIG_HUAWEI_HEADSET_DEBUG
+endif
+#  hi6555v2 codec
+snd-soc-hi6555v2-objs :=hisi/hi6555v2.o
+snd-soc-hi6555v2-utility-objs :=hisi/hi6555v2_utility.o
+snd-soc-hi6555v2-i2s-objs :=hisi/hi6555v2_i2s.o
+snd-soc-hi6405-objs :=hisi/hi6405.o
+#  hi6555v3 codec
+snd-soc-hi6555v3-objs :=hisi/hi6555v3.o
+snd-soc-hi6555v3-utility-objs :=hisi/hi6555v3_utility.o
+snd-soc-hi6555v3-i2s-objs :=hisi/hi6555v3_i2s.o
+#  hi3xxx codecless
+snd-soc-hicodecless-objs :=hisi/hicodecless.o
+snd-soc-hicodecless-utils-objs :=hisi/hicodecless_utils.o
 
 obj-$(CONFIG_SND_SOC_88PM860X)	+= snd-soc-88pm860x.o
 obj-$(CONFIG_SND_SOC_AB8500_CODEC)	+= snd-soc-ab8500-codec.o
@@ -436,7 +475,27 @@ obj-$(CONFIG_SND_SOC_WM9713)	+= snd-soc-wm9713.o
 obj-$(CONFIG_SND_SOC_WM_ADSP)	+= snd-soc-wm-adsp.o
 obj-$(CONFIG_SND_SOC_WM_HUBS)	+= snd-soc-wm-hubs.o
 
+# hissc codec
+#obj-$(CONFIG_SND_SOC_CODEC_HISSC)  += snd-soc-hissc.o
+# hi6555c codec
+obj-$(CONFIG_SND_SOC_CODEC_HI6555C) += snd-soc-hi6555c.o
 # Amp
 obj-$(CONFIG_SND_SOC_MAX9877)	+= snd-soc-max9877.o
 obj-$(CONFIG_SND_SOC_MAX98504)	+= snd-soc-max98504.o
 obj-$(CONFIG_SND_SOC_TPA6130A2)	+= snd-soc-tpa6130a2.o
+obj-$(CONFIG_SND_SOC_HI6402)	+= snd-soc-hi6402.o
+obj-$(CONFIG_SND_SOC_HI6403)    += snd-soc-hi6403.o
+obj-$(CONFIG_SND_SOC_HI6405)    += snd-soc-hi6405.o
+obj-$(CONFIG_HDMI_K3)           += snd-soc-hdmi-audio.o
+ccflags-y  += -Idrivers/devkit/audiokit/
+obj-$(CONFIG_SND_SOC_DP_AUDIO)    += snd-soc-dp-audio.o
+
+obj-$(CONFIG_SND_SOC_CODEC_HI6555V2) += snd-soc-hi6555v2.o
+obj-$(CONFIG_SND_SOC_CODEC_HI6555V2) += snd-soc-hi6555v2-utility.o
+obj-$(CONFIG_SND_SOC_CODEC_HI6555V2) += snd-soc-hi6555v2-i2s.o
+obj-$(CONFIG_SND_SOC_CODEC_HI6555V3) += snd-soc-hi6555v3.o
+obj-$(CONFIG_SND_SOC_CODEC_HI6555V3) += snd-soc-hi6555v3-utility.o
+obj-$(CONFIG_SND_SOC_CODEC_HI6555V3) += snd-soc-hi6555v3-i2s.o
+obj-$(CONFIG_SND_SOC_CODEC_HICODECLESS) += snd-soc-hicodecless.o
+obj-$(CONFIG_SND_SOC_CODEC_HICODECLESS) += snd-soc-hicodecless-utils.o
+obj-$(CONFIG_SND_SOC_HICODEC_DEBUG) += hisi/hicodec_debug.o

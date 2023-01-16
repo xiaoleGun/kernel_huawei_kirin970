@@ -88,15 +88,25 @@ static inline void __ClearPageMovable(struct page *page)
 
 #ifdef CONFIG_NUMA_BALANCING
 extern bool pmd_trans_migrating(pmd_t pmd);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+extern int migrate_misplaced_page(struct page *page,
+				  struct fault_env *vmf, int node);
+#else
 extern int migrate_misplaced_page(struct page *page,
 				  struct vm_area_struct *vma, int node);
+#endif
 #else
 static inline bool pmd_trans_migrating(pmd_t pmd)
 {
 	return false;
 }
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+static inline int migrate_misplaced_page(struct page *page,
+					 struct fault_env *vmf, int node)
+#else
 static inline int migrate_misplaced_page(struct page *page,
 					 struct vm_area_struct *vma, int node)
+#endif
 {
 	return -EAGAIN; /* can't migrate now */
 }

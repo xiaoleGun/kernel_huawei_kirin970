@@ -13,8 +13,6 @@
 #include <linux/stddef.h>
 #include <linux/stringify.h>
 
-extern int alternatives_applied;
-
 struct alt_instr {
 	s32 orig_offset;	/* offset to original instruction */
 	s32 alt_offset;		/* offset to replacement instruction */
@@ -182,6 +180,7 @@ void apply_alternatives(void *start, size_t length);
 	.org	. - (662b-661b) + (664b-663b)
 .endm
 
+#define NOP_INST	0xd503201f
 /*
  * Callback-based alternative epilogue
  */
@@ -196,7 +195,14 @@ void apply_alternatives(void *start, size_t length);
  */
 .macro alternative_else_nop_endif
 alternative_else
-	nops	(662b-661b) / AARCH64_INSN_SIZE
+	/*
+	 * The same assembler bug strikes again here if the first half
+	 * of the alternative sequence contains a .inst, leading to a
+	 * bizarre error message. Fortulately, .fill replaces the
+	 * "nops" macro by inserting padding with the target machine
+	 * endianness.
+	 */
+	.fill	(662b-661b) / AARCH64_INSN_SIZE, AARCH64_INSN_SIZE, NOP_INST
 alternative_endif
 .endm
 

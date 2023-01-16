@@ -8,6 +8,9 @@
 #include <asm/page.h>		/* pgprot_t */
 #include <linux/rbtree.h>
 
+#ifdef CONFIG_DEBUG_VMALLOC
+#include <linux/sched.h>
+#endif
 struct vm_area_struct;		/* vma defining user mapping in mm_types.h */
 struct notifier_block;		/* in notifier.h */
 
@@ -19,6 +22,7 @@ struct notifier_block;		/* in notifier.h */
 #define VM_UNINITIALIZED	0x00000020	/* vm_struct is not fully initialized */
 #define VM_NO_GUARD		0x00000040      /* don't add guard page */
 #define VM_KASAN		0x00000080      /* has allocated kasan shadow memory */
+#define VM_PMALLOC		0x00000100      /* pmalloc */
 /* bits [20..32] reserved for arch specific ioremap internals */
 
 /*
@@ -38,6 +42,10 @@ struct vm_struct {
 	unsigned int		nr_pages;
 	phys_addr_t		phys_addr;
 	const void		*caller;
+#ifdef CONFIG_DEBUG_VMALLOC
+	unsigned int		pid;
+	unsigned char		task_name[TASK_COMM_LEN];
+#endif
 };
 
 struct vmap_area {
@@ -95,6 +103,7 @@ extern int remap_vmalloc_range(struct vm_area_struct *vma, void *addr,
 							unsigned long pgoff);
 void vmalloc_sync_all(void);
  
+struct vmap_area *find_vmap_area(unsigned long addr);
 /*
  *	Lowlevel-APIs (not for driver use!)
  */

@@ -30,6 +30,7 @@
 #include <asm/mmu_context.h>
 #include <asm/processor.h>
 #include <asm/sysreg.h>
+#include <asm/traps.h>
 #include <asm/virt.h>
 
 unsigned long elf_hwcap __read_mostly;
@@ -82,6 +83,7 @@ cpufeature_pan_not_uao(const struct arm64_cpu_capabilities *entry, int __unused)
 
 
 static const struct arm64_ftr_bits ftr_id_aa64isar0[] = {
+	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, 48, 16, 0),
 	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, ID_AA64ISAR0_DP_SHIFT, 4, 0),
 	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, ID_AA64ISAR0_SM4_SHIFT, 4, 0),
 	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, ID_AA64ISAR0_SM3_SHIFT, 4, 0),
@@ -113,11 +115,18 @@ static const struct arm64_ftr_bits ftr_id_aa64pfr0[] = {
 	ARM64_FTR_END,
 };
 
+static const struct arm64_ftr_bits ftr_id_aa64pfr1[] = {
+	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, 8, 56, 0),
+	ARM64_FTR_BITS(FTR_STRICT, FTR_LOWER_SAFE, ID_AA64PFR1_SSBS_SHIFT, 4, ID_AA64PFR1_SSBS_PSTATE_NI),
+	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, 0, 4, 0),
+	ARM64_FTR_END,
+};
+
 static const struct arm64_ftr_bits ftr_id_aa64mmfr0[] = {
 	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, 32, 32, 0),
 	S_ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, ID_AA64MMFR0_TGRAN4_SHIFT, 4, ID_AA64MMFR0_TGRAN4_NI),
 	S_ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, ID_AA64MMFR0_TGRAN64_SHIFT, 4, ID_AA64MMFR0_TGRAN64_NI),
-	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, ID_AA64MMFR0_TGRAN16_SHIFT, 4, ID_AA64MMFR0_TGRAN16_NI),
+	ARM64_FTR_BITS(FTR_NONSTRICT, FTR_EXACT, ID_AA64MMFR0_TGRAN16_SHIFT, 4, ID_AA64MMFR0_TGRAN16_NI),
 	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, ID_AA64MMFR0_BIGENDEL0_SHIFT, 4, 0),
 	/* Linux shouldn't care about secure memory */
 	ARM64_FTR_BITS(FTR_NONSTRICT, FTR_EXACT, ID_AA64MMFR0_SNSMEM_SHIFT, 4, 0),
@@ -152,11 +161,13 @@ static const struct arm64_ftr_bits ftr_id_aa64mmfr2[] = {
 };
 
 static const struct arm64_ftr_bits ftr_ctr[] = {
-	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, 31, 1, 1),	/* RAO */
-	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, 28, 3, 0),
+	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, 31, 1, 1),	/* RES1 */
+	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, 30, 1, 0),
+	ARM64_FTR_BITS(FTR_STRICT, FTR_LOWER_SAFE, CTR_DIC_SHIFT, 1, 1),	/* DIC */
+	ARM64_FTR_BITS(FTR_STRICT, FTR_LOWER_SAFE, CTR_IDC_SHIFT, 1, 1),	/* IDC */
 	ARM64_FTR_BITS(FTR_STRICT, FTR_HIGHER_SAFE, 24, 4, 0),	/* CWG */
-	ARM64_FTR_BITS(FTR_STRICT, FTR_LOWER_SAFE, 20, 4, 0),	/* ERG */
-	ARM64_FTR_BITS(FTR_STRICT, FTR_LOWER_SAFE, CTR_DMINLINE_SHIFT, 4, 1),
+	ARM64_FTR_BITS(FTR_STRICT, FTR_HIGHER_SAFE, 20, 4, 0),	/* ERG */
+	ARM64_FTR_BITS(FTR_STRICT, FTR_LOWER_SAFE, 16, 4, 1),	/* DminLine */
 	/*
 	 * Linux can handle differing I-cache policies. Userspace JITs will
 	 * make use of *minLine.
@@ -164,7 +175,7 @@ static const struct arm64_ftr_bits ftr_ctr[] = {
 	 */
 	ARM64_FTR_BITS(FTR_NONSTRICT, FTR_EXACT, 14, 2, ICACHE_POLICY_AIVIVT),	/* L1Ip */
 	ARM64_FTR_BITS(FTR_STRICT, FTR_EXACT, 4, 10, 0),	/* RAZ */
-	ARM64_FTR_BITS(FTR_STRICT, FTR_LOWER_SAFE, CTR_IMINLINE_SHIFT, 4, 0),
+	ARM64_FTR_BITS(FTR_STRICT, FTR_LOWER_SAFE, 0, 4, 0),	/* IminLine */
 	ARM64_FTR_END,
 };
 
@@ -320,7 +331,7 @@ static const struct __ftr_reg_entry {
 
 	/* Op1 = 0, CRn = 0, CRm = 4 */
 	ARM64_FTR_REG(SYS_ID_AA64PFR0_EL1, ftr_id_aa64pfr0),
-	ARM64_FTR_REG(SYS_ID_AA64PFR1_EL1, ftr_aa64raz),
+	ARM64_FTR_REG(SYS_ID_AA64PFR1_EL1, ftr_id_aa64pfr1),
 
 	/* Op1 = 0, CRn = 0, CRm = 5 */
 	ARM64_FTR_REG(SYS_ID_AA64DFR0_EL1, ftr_id_aa64dfr0),
@@ -516,6 +527,7 @@ void update_cpu_features(int cpu,
 			 struct cpuinfo_arm64 *boot)
 {
 	int taint = 0;
+	unsigned int part_num = read_cpuid_part_number();
 
 	/*
 	 * The kernel can handle differing I-cache policies, but otherwise
@@ -561,19 +573,22 @@ void update_cpu_features(int cpu,
 	 * memory are mapped within the minimum PARange of all CPUs.
 	 * Linux should not care about secure memory.
 	 */
-	taint |= check_update_ftr_reg(SYS_ID_AA64MMFR0_EL1, cpu,
-				      info->reg_id_aa64mmfr0, boot->reg_id_aa64mmfr0);
-	taint |= check_update_ftr_reg(SYS_ID_AA64MMFR1_EL1, cpu,
-				      info->reg_id_aa64mmfr1, boot->reg_id_aa64mmfr1);
+	if (part_num != ARM_CPU_PART_ENYO) {
+		taint |= check_update_ftr_reg(SYS_ID_AA64MMFR0_EL1, cpu,
+					      info->reg_id_aa64mmfr0, boot->reg_id_aa64mmfr0);
+		taint |= check_update_ftr_reg(SYS_ID_AA64MMFR1_EL1, cpu,
+					      info->reg_id_aa64mmfr1, boot->reg_id_aa64mmfr1);
+	}
 	taint |= check_update_ftr_reg(SYS_ID_AA64MMFR2_EL1, cpu,
 				      info->reg_id_aa64mmfr2, boot->reg_id_aa64mmfr2);
 
 	/*
 	 * EL3 is not our concern.
-	 * ID_AA64PFR1 is currently RES0.
 	 */
-	taint |= check_update_ftr_reg(SYS_ID_AA64PFR0_EL1, cpu,
+	if (part_num != ARM_CPU_PART_ENYO) {
+		taint |= check_update_ftr_reg(SYS_ID_AA64PFR0_EL1, cpu,
 				      info->reg_id_aa64pfr0, boot->reg_id_aa64pfr0);
+	}
 	taint |= check_update_ftr_reg(SYS_ID_AA64PFR1_EL1, cpu,
 				      info->reg_id_aa64pfr1, boot->reg_id_aa64pfr1);
 
@@ -594,8 +609,10 @@ void update_cpu_features(int cpu,
 					info->reg_id_isar2, boot->reg_id_isar2);
 		taint |= check_update_ftr_reg(SYS_ID_ISAR3_EL1, cpu,
 					info->reg_id_isar3, boot->reg_id_isar3);
-		taint |= check_update_ftr_reg(SYS_ID_ISAR4_EL1, cpu,
+		if (part_num != ARM_CPU_PART_ENYO) {
+			taint |= check_update_ftr_reg(SYS_ID_ISAR4_EL1, cpu,
 					info->reg_id_isar4, boot->reg_id_isar4);
+		}
 		taint |= check_update_ftr_reg(SYS_ID_ISAR5_EL1, cpu,
 					info->reg_id_isar5, boot->reg_id_isar5);
 
@@ -612,10 +629,12 @@ void update_cpu_features(int cpu,
 					info->reg_id_mmfr2, boot->reg_id_mmfr2);
 		taint |= check_update_ftr_reg(SYS_ID_MMFR3_EL1, cpu,
 					info->reg_id_mmfr3, boot->reg_id_mmfr3);
-		taint |= check_update_ftr_reg(SYS_ID_PFR0_EL1, cpu,
+		if (part_num != ARM_CPU_PART_ENYO) {
+			taint |= check_update_ftr_reg(SYS_ID_PFR0_EL1, cpu,
 					info->reg_id_pfr0, boot->reg_id_pfr0);
-		taint |= check_update_ftr_reg(SYS_ID_PFR1_EL1, cpu,
+			taint |= check_update_ftr_reg(SYS_ID_PFR1_EL1, cpu,
 					info->reg_id_pfr1, boot->reg_id_pfr1);
+		}
 		taint |= check_update_ftr_reg(SYS_MVFR0_EL1, cpu,
 					info->reg_mvfr0, boot->reg_mvfr0);
 		taint |= check_update_ftr_reg(SYS_MVFR1_EL1, cpu,
@@ -753,6 +772,46 @@ static bool hyp_offset_low(const struct arm64_cpu_capabilities *entry,
 	return idmap_addr > GENMASK(VA_BITS - 2, 0) && !is_kernel_in_hyp_mode();
 }
 
+static bool has_cache_idc(const struct arm64_cpu_capabilities *entry,
+			  int scope)
+{
+	u64 ctr;
+
+	if (scope == SCOPE_SYSTEM)
+		ctr = arm64_ftr_reg_ctrel0.sys_val;
+	else
+		ctr = read_cpuid_effective_cachetype();
+
+	return ctr & BIT(CTR_IDC_SHIFT);
+}
+
+static int cpu_emulate_effective_ctr(void *__unused)
+{
+	/*
+	 * If the CPU exposes raw CTR_EL0.IDC = 0, while effectively
+	 * CTR_EL0.IDC = 1 (from CLIDR values), we need to trap accesses
+	 * to the CTR_EL0 on this CPU and emulate it with the real/safe
+	 * value.
+	 */
+	if (!(read_cpuid_cachetype() & BIT(CTR_IDC_SHIFT)))
+		sysreg_clear_set(sctlr_el1, SCTLR_EL1_UCT, 0);
+
+	return 0;
+}
+
+static bool has_cache_dic(const struct arm64_cpu_capabilities *entry,
+			  int scope)
+{
+	u64 ctr;
+
+	if (scope == SCOPE_SYSTEM)
+		ctr = arm64_ftr_reg_ctrel0.sys_val;
+	else
+		ctr = read_cpuid_effective_cachetype();
+
+	return ctr & BIT(CTR_DIC_SHIFT);
+}
+
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
 static int __kpti_forced; /* 0: not forced, >0: forced on, <0: forced off */
 
@@ -833,21 +892,61 @@ static int __init parse_kpti(char *str)
 early_param("kpti", parse_kpti);
 #endif	/* CONFIG_UNMAP_KERNEL_AT_EL0 */
 
-static int cpu_copy_el2regs(void *__unused)
-{
-	/*
-	 * Copy register values that aren't redirected by hardware.
-	 *
-	 * Before code patching, we only set tpidr_el1, all CPUs need to copy
-	 * this value to tpidr_el2 before we patch the code. Once we've done
-	 * that, freshly-onlined CPUs will set tpidr_el2, so we don't need to
-	 * do anything here.
-	 */
-	if (!alternatives_applied)
-		write_sysreg(read_sysreg(tpidr_el1), tpidr_el2);
+#ifdef CONFIG_HISI_HHEE
+#include <linux/hisi/hisi_hkip.h>
 
+static bool has_hhee(const struct arm64_cpu_capabilities *entry, int __unused)
+{
+	return hhee_is_present();
+}
+#endif
+
+#ifdef CONFIG_ARM64_SSBD
+static int ssbs_emulation_handler(struct pt_regs *regs, u32 instr)
+{
+	if (user_mode(regs))
+		return 1;
+
+	if (instr & BIT(CRm_shift))
+		regs->pstate |= PSR_SSBS_BIT;
+	else
+		regs->pstate &= ~PSR_SSBS_BIT;
+
+	regs->pc += 4;
 	return 0;
 }
+
+static struct undef_hook ssbs_emulation_hook = {
+	.instr_mask	= ~(1U << CRm_shift),
+	.instr_val	= 0xd500001f | REG_PSTATE_SSBS_IMM,
+	.fn		= ssbs_emulation_handler,
+};
+
+static int cpu_enable_ssbs(void *__unused)
+{
+#ifndef CONFIG_HISI_BYPASS_SSBS
+	static bool undef_hook_registered = false;
+	static DEFINE_SPINLOCK(hook_lock);
+
+	spin_lock(&hook_lock);
+	if (!undef_hook_registered) {
+		register_undef_hook(&ssbs_emulation_hook);
+		undef_hook_registered = true;
+	}
+	spin_unlock(&hook_lock);
+
+	if (arm64_get_ssbd_state() == ARM64_SSBD_FORCE_DISABLE) {
+		sysreg_clear_set(sctlr_el1, 0, SCTLR_ELx_DSSBS);
+		arm64_set_ssbd_mitigation(false);
+	} else {
+		arm64_set_ssbd_mitigation(true);
+	}
+#else
+	sysreg_clear_set(sctlr_el1, 0, SCTLR_ELx_DSSBS);
+#endif
+	return 0;
+}
+#endif /* CONFIG_ARM64_SSBD */
 
 static const struct arm64_cpu_capabilities arm64_features[] = {
 	{
@@ -910,12 +1009,18 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.matches = cpufeature_pan_not_uao,
 	},
 #endif /* CONFIG_ARM64_PAN */
+#ifdef CONFIG_HISI_HHEE
+	{
+		.desc = "Huawei Hypervisor Execution Environment",
+		.capability = ARM64_HAS_HHEE,
+		.matches = has_hhee,
+	},
+#endif
 	{
 		.desc = "Virtualization Host Extensions",
 		.capability = ARM64_HAS_VIRT_HOST_EXTN,
 		.def_scope = SCOPE_SYSTEM,
 		.matches = runs_at_el2,
-		.enable = cpu_copy_el2regs,
 	},
 	{
 		.desc = "32-bit EL0 Support",
@@ -942,6 +1047,31 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 		.enable = kpti_install_ng_mappings,
 	},
 #endif
+#ifdef CONFIG_ARM64_SSBD
+	{
+		.desc = "Speculative Store Bypassing Safe (SSBS)",
+		.capability = ARM64_SSBS,
+		.matches = has_cpuid_feature,
+		.sys_reg = SYS_ID_AA64PFR1_EL1,
+		.field_pos = ID_AA64PFR1_SSBS_SHIFT,
+		.sign = FTR_UNSIGNED,
+		.min_field_value = ID_AA64PFR1_SSBS_PSTATE_ONLY,
+		.enable = cpu_enable_ssbs,
+	},
+#endif
+	{
+		.desc = "Data cache clean to the PoU not required for I/D coherence",
+		.capability = ARM64_HAS_CACHE_IDC,
+		.def_scope = SCOPE_SYSTEM,
+		.matches = has_cache_idc,
+		.enable = cpu_emulate_effective_ctr,
+	},
+	{
+		.desc = "Instruction cache invalidation not required for I/D coherence",
+		.capability = ARM64_HAS_CACHE_DIC,
+		.def_scope = SCOPE_SYSTEM,
+		.matches = has_cache_dic,
+	},
 	{},
 };
 
@@ -961,8 +1091,10 @@ static const struct arm64_cpu_capabilities arm64_features[] = {
 static const struct arm64_cpu_capabilities arm64_elf_hwcaps[] = {
 	HWCAP_CAP(SYS_ID_AA64ISAR0_EL1, ID_AA64ISAR0_AES_SHIFT, FTR_UNSIGNED, 2, CAP_HWCAP, HWCAP_PMULL),
 	HWCAP_CAP(SYS_ID_AA64ISAR0_EL1, ID_AA64ISAR0_AES_SHIFT, FTR_UNSIGNED, 1, CAP_HWCAP, HWCAP_AES),
+#ifndef CONFIG_HIDE_SHA_CAP
 	HWCAP_CAP(SYS_ID_AA64ISAR0_EL1, ID_AA64ISAR0_SHA1_SHIFT, FTR_UNSIGNED, 1, CAP_HWCAP, HWCAP_SHA1),
 	HWCAP_CAP(SYS_ID_AA64ISAR0_EL1, ID_AA64ISAR0_SHA2_SHIFT, FTR_UNSIGNED, 1, CAP_HWCAP, HWCAP_SHA2),
+#endif
 	HWCAP_CAP(SYS_ID_AA64ISAR0_EL1, ID_AA64ISAR0_SHA2_SHIFT, FTR_UNSIGNED, 2, CAP_HWCAP, HWCAP_SHA512),
 	HWCAP_CAP(SYS_ID_AA64ISAR0_EL1, ID_AA64ISAR0_CRC32_SHIFT, FTR_UNSIGNED, 1, CAP_HWCAP, HWCAP_CRC32),
 	HWCAP_CAP(SYS_ID_AA64ISAR0_EL1, ID_AA64ISAR0_ATOMICS_SHIFT, FTR_UNSIGNED, 2, CAP_HWCAP, HWCAP_ATOMICS),
@@ -974,6 +1106,7 @@ static const struct arm64_cpu_capabilities arm64_elf_hwcaps[] = {
 	HWCAP_CAP(SYS_ID_AA64PFR0_EL1, ID_AA64PFR0_FP_SHIFT, FTR_SIGNED, 1, CAP_HWCAP, HWCAP_FPHP),
 	HWCAP_CAP(SYS_ID_AA64PFR0_EL1, ID_AA64PFR0_ASIMD_SHIFT, FTR_SIGNED, 0, CAP_HWCAP, HWCAP_ASIMD),
 	HWCAP_CAP(SYS_ID_AA64PFR0_EL1, ID_AA64PFR0_ASIMD_SHIFT, FTR_SIGNED, 1, CAP_HWCAP, HWCAP_ASIMDHP),
+	HWCAP_CAP(SYS_ID_AA64PFR1_EL1, ID_AA64PFR1_SSBS_SHIFT, FTR_UNSIGNED, ID_AA64PFR1_SSBS_PSTATE_INSNS, CAP_HWCAP, HWCAP_SSBS),
 	{},
 };
 
@@ -981,8 +1114,10 @@ static const struct arm64_cpu_capabilities compat_elf_hwcaps[] = {
 #ifdef CONFIG_COMPAT
 	HWCAP_CAP(SYS_ID_ISAR5_EL1, ID_ISAR5_AES_SHIFT, FTR_UNSIGNED, 2, CAP_COMPAT_HWCAP2, COMPAT_HWCAP2_PMULL),
 	HWCAP_CAP(SYS_ID_ISAR5_EL1, ID_ISAR5_AES_SHIFT, FTR_UNSIGNED, 1, CAP_COMPAT_HWCAP2, COMPAT_HWCAP2_AES),
+#ifndef CONFIG_HIDE_SHA_CAP
 	HWCAP_CAP(SYS_ID_ISAR5_EL1, ID_ISAR5_SHA1_SHIFT, FTR_UNSIGNED, 1, CAP_COMPAT_HWCAP2, COMPAT_HWCAP2_SHA1),
 	HWCAP_CAP(SYS_ID_ISAR5_EL1, ID_ISAR5_SHA2_SHIFT, FTR_UNSIGNED, 1, CAP_COMPAT_HWCAP2, COMPAT_HWCAP2_SHA2),
+#endif
 	HWCAP_CAP(SYS_ID_ISAR5_EL1, ID_ISAR5_CRC32_SHIFT, FTR_UNSIGNED, 1, CAP_COMPAT_HWCAP2, COMPAT_HWCAP2_CRC32),
 #endif
 	{},
@@ -1078,16 +1213,8 @@ void update_cpu_capabilities(const struct arm64_cpu_capabilities *caps,
  */
 void __init enable_cpu_capabilities(const struct arm64_cpu_capabilities *caps)
 {
-	for (; caps->matches; caps++) {
-		unsigned int num = caps->capability;
-
-		if (!cpus_have_cap(num))
-			continue;
-
-		/* Ensure cpus_have_const_cap(num) works */
-		static_branch_enable(&cpu_hwcap_keys[num]);
-
-		if (caps->enable) {
+	for (; caps->matches; caps++)
+		if (caps->enable && cpus_have_cap(caps->capability))
 			/*
 			 * Use stop_machine() as it schedules the work allowing
 			 * us to modify PSTATE, instead of on_each_cpu() which
@@ -1095,8 +1222,6 @@ void __init enable_cpu_capabilities(const struct arm64_cpu_capabilities *caps)
 			 * we return.
 			 */
 			stop_machine(caps->enable, (void *)caps, cpu_online_mask);
-		}
-	}
 }
 
 /*
@@ -1128,8 +1253,11 @@ static void
 verify_local_elf_hwcaps(const struct arm64_cpu_capabilities *caps)
 {
 
+	unsigned int part_num = read_cpuid_part_number();
 	for (; caps->matches; caps++)
 		if (cpus_have_elf_hwcap(caps) && !caps->matches(caps, SCOPE_LOCAL_CPU)) {
+			if ((part_num == ARM_CPU_PART_ENYO) && (caps->sys_reg == SYS_ID_ISAR5_EL1))
+				continue;
 			pr_crit("CPU%d: missing HWCAP: %s\n",
 					smp_processor_id(), caps->desc);
 			cpu_die_early();
@@ -1200,14 +1328,6 @@ static void __init setup_feature_capabilities(void)
 	enable_cpu_capabilities(arm64_features);
 }
 
-DEFINE_STATIC_KEY_FALSE(arm64_const_caps_ready);
-EXPORT_SYMBOL(arm64_const_caps_ready);
-
-static void __init mark_const_caps_ready(void)
-{
-	static_branch_enable(&arm64_const_caps_ready);
-}
-
 extern const struct arm64_cpu_capabilities arm64_errata[];
 
 bool this_cpu_has_cap(unsigned int cap)
@@ -1224,7 +1344,6 @@ void __init setup_cpu_features(void)
 	/* Set the CPU feature capabilies */
 	setup_feature_capabilities();
 	enable_errata_workarounds();
-	mark_const_caps_ready();
 	setup_elf_hwcaps(arm64_elf_hwcaps);
 
 	if (system_supports_32bit_el0())

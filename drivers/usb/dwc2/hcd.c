@@ -2268,21 +2268,9 @@ static int dwc2_core_init(struct dwc2_hsotg *hsotg, bool initial_setup)
  */
 static void dwc2_core_host_init(struct dwc2_hsotg *hsotg)
 {
-	u32 hcfg, hfir, otgctl, usbcfg;
+	u32 hcfg, hfir, otgctl;
 
 	dev_dbg(hsotg->dev, "%s(%p)\n", __func__, hsotg);
-
-	/* Set HS/FS Timeout Calibration to 7 (max available value).
-	 * The number of PHY clocks that the application programs in
-	 * this field is added to the high/full speed interpacket timeout
-	 * duration in the core to account for any additional delays
-	 * introduced by the PHY. This can be required, because the delay
-	 * introduced by the PHY in generating the linestate condition
-	 * can vary from one PHY to another.
-	 */
-	usbcfg = dwc2_readl(hsotg->regs + GUSBCFG);
-	usbcfg |= GUSBCFG_TOUTCAL(7);
-	dwc2_writel(usbcfg, hsotg->regs + GUSBCFG);
 
 	/* Restart the Phy Clock */
 	dwc2_writel(0, hsotg->regs + PCGCTL);
@@ -2544,29 +2532,34 @@ static void dwc2_hc_init_xfer(struct dwc2_hsotg *hsotg,
 
 #define DWC2_USB_DMA_ALIGN 4
 
+struct dma_aligned_buffer {
+	void *kmalloc_ptr;
+	void *old_xfer_buffer;
+	u8 data[0];
+};
+
 static void dwc2_free_dma_aligned_buffer(struct urb *urb)
 {
-	void *stored_xfer_buffer;
+	struct dma_aligned_buffer *temp;
 
 	if (!(urb->transfer_flags & URB_ALIGNED_TEMP_BUFFER))
 		return;
 
-	/* Restore urb->transfer_buffer from the end of the allocated area */
-	memcpy(&stored_xfer_buffer, urb->transfer_buffer +
-	       urb->transfer_buffer_length, sizeof(urb->transfer_buffer));
+	temp = container_of(urb->transfer_buffer,
+		struct dma_aligned_buffer, data);
 
 	if (usb_urb_dir_in(urb))
-		memcpy(stored_xfer_buffer, urb->transfer_buffer,
+		memcpy(temp->old_xfer_buffer, temp->data,
 		       urb->transfer_buffer_length);
-	kfree(urb->transfer_buffer);
-	urb->transfer_buffer = stored_xfer_buffer;
+	urb->transfer_buffer = temp->old_xfer_buffer;
+	kfree(temp->kmalloc_ptr);
 
 	urb->transfer_flags &= ~URB_ALIGNED_TEMP_BUFFER;
 }
 
 static int dwc2_alloc_dma_aligned_buffer(struct urb *urb, gfp_t mem_flags)
 {
-	void *kmalloc_ptr;
+	struct dma_aligned_buffer *temp, *kmalloc_ptr;
 	size_t kmalloc_size;
 
 	if (urb->num_sgs || urb->sg ||
@@ -2574,29 +2567,22 @@ static int dwc2_alloc_dma_aligned_buffer(struct urb *urb, gfp_t mem_flags)
 	    !((uintptr_t)urb->transfer_buffer & (DWC2_USB_DMA_ALIGN - 1)))
 		return 0;
 
-	/*
-	 * Allocate a buffer with enough padding for original transfer_buffer
-	 * pointer. This allocation is guaranteed to be aligned properly for
-	 * DMA
-	 */
+	/* Allocate a buffer with enough padding for alignment */
 	kmalloc_size = urb->transfer_buffer_length +
-		sizeof(urb->transfer_buffer);
+		sizeof(struct dma_aligned_buffer) + DWC2_USB_DMA_ALIGN - 1;
 
 	kmalloc_ptr = kmalloc(kmalloc_size, mem_flags);
 	if (!kmalloc_ptr)
 		return -ENOMEM;
 
-	/*
-	 * Position value of original urb->transfer_buffer pointer to the end
-	 * of allocation for later referencing
-	 */
-	memcpy(kmalloc_ptr + urb->transfer_buffer_length,
-	       &urb->transfer_buffer, sizeof(urb->transfer_buffer));
-
+	/* Position our struct dma_aligned_buffer such that data is aligned */
+	temp = PTR_ALIGN(kmalloc_ptr + 1, DWC2_USB_DMA_ALIGN) - 1;
+	temp->kmalloc_ptr = kmalloc_ptr;
+	temp->old_xfer_buffer = urb->transfer_buffer;
 	if (usb_urb_dir_out(urb))
-		memcpy(kmalloc_ptr, urb->transfer_buffer,
+		memcpy(temp->data, urb->transfer_buffer,
 		       urb->transfer_buffer_length);
-	urb->transfer_buffer = kmalloc_ptr;
+	urb->transfer_buffer = temp->data;
 
 	urb->transfer_flags |= URB_ALIGNED_TEMP_BUFFER;
 
@@ -3251,12 +3237,8 @@ static void dwc2_conn_id_status_change(struct work_struct *work)
 		if (count > 250)
 			dev_err(hsotg->dev,
 				"Connection id status change timed out\n");
-
-		spin_lock_irqsave(&hsotg->lock, flags);
-		dwc2_hsotg_disconnect(hsotg);
-		spin_unlock_irqrestore(&hsotg->lock, flags);
-
 		hsotg->op_state = OTG_STATE_A_HOST;
+
 		/* Initialize the Core for Host mode */
 		dwc2_core_init(hsotg, false);
 		dwc2_enable_global_interrupts(hsotg);

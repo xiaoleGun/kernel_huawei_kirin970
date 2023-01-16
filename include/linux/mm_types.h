@@ -365,6 +365,10 @@ struct vm_area_struct {
 	struct mempolicy *vm_policy;	/* NUMA policy for the VMA */
 #endif
 	struct vm_userfaultfd_ctx vm_userfaultfd_ctx;
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	seqcount_t vm_sequence;
+	atomic_t vm_ref_count;		/* see vma_get(), vma_put() */
+#endif
 };
 
 struct core_thread {
@@ -400,6 +404,9 @@ struct mm_rss_stat {
 };
 
 struct kioctx_table;
+#ifdef CONFIG_BLK_DEV_THROTTLING
+struct blk_throtl_io_limit;
+#endif
 struct mm_struct {
 	struct vm_area_struct *mmap;		/* list of VMAs */
 	struct rb_root mm_rb;
@@ -467,6 +474,9 @@ struct mm_struct {
 	spinlock_t			ioctx_lock;
 	struct kioctx_table __rcu	*ioctx_table;
 #endif
+#ifdef CONFIG_BLK_DEV_THROTTLING
+	struct blk_throtl_io_limit	*io_limit;
+#endif
 #ifdef CONFIG_MEMCG
 	/*
 	 * "owner" points to a task that is regarded as the canonical
@@ -528,6 +538,14 @@ struct mm_struct {
 	atomic_long_t hugetlb_usage;
 #endif
 	struct work_struct async_put_work;
+
+#ifdef CONFIG_TASK_PROTECT_LRU
+	int protect;
+#endif
+
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	rwlock_t mm_rb_lock;
+#endif
 };
 
 static inline void mm_init_cpumask(struct mm_struct *mm)

@@ -169,6 +169,10 @@ int scsi_partsize(unsigned char *buf, unsigned long capacity,
 		/* This is for >1023 cylinders */
 		ext_cyl = (logical_end - (end_head * end_sector + end_sector))
 		    / (end_head + 1) / end_sector;
+		if (INT_MAX / ext_cyl < (end_head + 1) * end_sector ||
+			INT_MAX - ext_cyl * (end_head + 1) * end_sector <
+				end_head * end_sector + end_sector)
+			return -1;
 		ext_physical_end = ext_cyl * (end_head + 1) * end_sector +
 		    end_head * end_sector + end_sector;
 

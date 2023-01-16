@@ -32,6 +32,12 @@ enum perf_type_id {
 	PERF_TYPE_HW_CACHE			= 3,
 	PERF_TYPE_RAW				= 4,
 	PERF_TYPE_BREAKPOINT			= 5,
+#ifdef CONFIG_ARM_DSU_PMU
+	PERF_TYPE_DSU,
+#endif
+#ifdef CONFIG_HISI_KARMA_PMU
+	PERF_TYPE_KARMA,
+#endif
 
 	PERF_TYPE_MAX,				/* non-ABI */
 };
@@ -357,7 +363,14 @@ struct perf_event_attr {
 		__u64		config1; /* extension of config */
 	};
 	union {
+#ifdef CONFIG_HAVE_HW_BREAKPOINT_ADDR_MASK
+		struct {
+			__u32		bp_len;
+			__u32		bp_addr_mask;
+		};
+#else
 		__u64		bp_len;
+#endif
 		__u64		config2; /* extension of config1 */
 	};
 	__u64	branch_sample_type; /* enum perf_branch_sample_type */

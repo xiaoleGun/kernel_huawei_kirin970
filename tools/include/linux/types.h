@@ -7,7 +7,6 @@
 
 #define __SANE_USERSPACE_TYPES__	/* For PPC64, to get LL64 types */
 #include <asm/types.h>
-#include <asm/posix_types.h>
 
 struct page;
 struct kmem_cache;

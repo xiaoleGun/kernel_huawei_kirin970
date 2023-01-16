@@ -121,8 +121,10 @@ static void dbs_freq_increase(struct cpufreq_policy *policy, unsigned int freq)
 	if (od_tuners->powersave_bias)
 		freq = od_ops.powersave_bias_target(policy, freq,
 				CPUFREQ_RELATION_H);
+#ifndef CONFIG_HISI_BIG_MAXFREQ_HOTPLUG
 	else if (policy->cur == policy->max)
 		return;
+#endif
 
 	__cpufreq_driver_target(policy, freq, od_tuners->powersave_bias ?
 			CPUFREQ_RELATION_L : CPUFREQ_RELATION_H);

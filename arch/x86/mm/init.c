@@ -655,9 +655,7 @@ void __init init_mem_mapping(void)
  */
 int devmem_is_allowed(unsigned long pagenr)
 {
-	if (region_intersects(PFN_PHYS(pagenr), PAGE_SIZE,
-				IORESOURCE_SYSTEM_RAM, IORES_DESC_NONE)
-			!= REGION_DISJOINT) {
+	if (page_is_ram(pagenr)) {
 		/*
 		 * For disallowed memory regions in the low 1MB range,
 		 * request that the page be shown as all zeros.
@@ -783,7 +781,6 @@ void update_cache_mode_entry(unsigned entry, enum page_cache_mode cache)
 	__pte2cachemode_tbl[entry] = cache;
 }
 
-#ifdef CONFIG_SWAP
 unsigned long max_swapfile_size(void)
 {
 	unsigned long pages;
@@ -792,16 +789,7 @@ unsigned long max_swapfile_size(void)
 
 	if (boot_cpu_has_bug(X86_BUG_L1TF)) {
 		/* Limit the swap file size to MAX_PA/2 for L1TF workaround */
-		unsigned long long l1tf_limit = l1tf_pfn_limit();
-		/*
-		 * We encode swap offsets also with 3 bits below those for pfn
-		 * which makes the usable limit higher.
-		 */
-#if CONFIG_PGTABLE_LEVELS > 2
-		l1tf_limit <<= PAGE_SHIFT - SWP_OFFSET_FIRST_BIT;
-#endif
-		pages = min_t(unsigned long long, l1tf_limit, pages);
+		pages = min_t(unsigned long, l1tf_pfn_limit() + 1, pages);
 	}
 	return pages;
 }
-#endif

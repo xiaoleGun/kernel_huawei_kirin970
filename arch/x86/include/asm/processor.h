@@ -88,7 +88,7 @@ struct cpuinfo_x86 {
 	__u8			x86;		/* CPU family */
 	__u8			x86_vendor;	/* CPU vendor */
 	__u8			x86_model;
-	__u8			x86_stepping;
+	__u8			x86_mask;
 #ifdef CONFIG_X86_32
 	char			wp_works_ok;	/* It doesn't on 386's */
 
@@ -113,7 +113,7 @@ struct cpuinfo_x86 {
 	char			x86_vendor_id[16];
 	char			x86_model_id[64];
 	/* in KB - valid for CPUS which support this call: */
-	unsigned int		x86_cache_size;
+	int			x86_cache_size;
 	int			x86_cache_alignment;	/* In bytes */
 	/* Cache QoS architectural values: */
 	int			x86_cache_max_rmid;	/* max index */
@@ -136,8 +136,6 @@ struct cpuinfo_x86 {
 	/* Index into per_cpu list: */
 	u16			cpu_index;
 	u32			microcode;
-	/* Address space bits used by the cache internally */
-	u8			x86_cache_bits;
 };
 
 #define X86_VENDOR_INTEL	0
@@ -158,8 +156,8 @@ extern struct cpuinfo_x86	boot_cpu_data;
 extern struct cpuinfo_x86	new_cpu_data;
 
 extern struct tss_struct	doublefault_tss;
-extern __u32			cpu_caps_cleared[NCAPINTS + NBUGINTS];
-extern __u32			cpu_caps_set[NCAPINTS + NBUGINTS];
+extern __u32			cpu_caps_cleared[NCAPINTS];
+extern __u32			cpu_caps_set[NCAPINTS];
 
 #ifdef CONFIG_SMP
 DECLARE_PER_CPU_READ_MOSTLY(struct cpuinfo_x86, cpu_info);
@@ -175,9 +173,9 @@ extern const struct seq_operations cpuinfo_op;
 
 extern void cpu_detect(struct cpuinfo_x86 *c);
 
-static inline unsigned long long l1tf_pfn_limit(void)
+static inline unsigned long l1tf_pfn_limit(void)
 {
-	return BIT_ULL(boot_cpu_data.x86_cache_bits - 1 - PAGE_SHIFT);
+	return BIT(boot_cpu_data.x86_phys_bits - 1 - PAGE_SHIFT) - 1;
 }
 
 extern void early_cpu_init(void);
@@ -398,6 +396,8 @@ struct thread_struct {
 	unsigned short		gsindex;
 #endif
 
+	u32			status;		/* thread synchronous flags */
+
 #ifdef CONFIG_X86_64
 	unsigned long		fsbase;
 	unsigned long		gsbase;
@@ -601,7 +601,7 @@ static inline void sync_core(void)
 {
 	int tmp;
 
-#ifdef CONFIG_X86_32
+#ifdef CONFIG_M486
 	/*
 	 * Do a CPUID if available, otherwise do a jump.  The jump
 	 * can conveniently enough be the jump around CPUID.
@@ -862,16 +862,4 @@ bool xen_set_default_idle(void);
 
 void stop_this_cpu(void *dummy);
 void df_debug(struct pt_regs *regs, long error_code);
-
-enum l1tf_mitigations {
-	L1TF_MITIGATION_OFF,
-	L1TF_MITIGATION_FLUSH_NOWARN,
-	L1TF_MITIGATION_FLUSH,
-	L1TF_MITIGATION_FLUSH_NOSMT,
-	L1TF_MITIGATION_FULL,
-	L1TF_MITIGATION_FULL_FORCE
-};
-
-extern enum l1tf_mitigations l1tf_mitigation;
-
 #endif /* _ASM_X86_PROCESSOR_H */

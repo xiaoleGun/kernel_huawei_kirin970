@@ -282,6 +282,45 @@ void fput(struct file *file)
 	}
 }
 
+#ifdef CONFIG_MPTCP
+void fput_by_pid(pid_t pid, struct file *file)
+{
+	struct task_struct *task;
+
+	rcu_read_lock();
+
+	task = find_task_by_vpid(pid);
+	if (!task) {
+		rcu_read_unlock();
+		return;
+	}
+
+	get_task_struct(task);
+	rcu_read_unlock();
+
+	if (atomic_long_dec_and_test(&file->f_count)) {
+		if (likely(!in_interrupt() && !(task->flags & PF_KTHREAD))) {
+			init_task_work(&file->f_u.fu_rcuhead, ____fput);
+			if (!task_work_add(task, &file->f_u.fu_rcuhead, true)) {
+				put_task_struct(task);
+				return;
+			}
+			/*
+			 * After this task has run exit_task_work(),
+			 * task_work_add() will fail.  Fall through to delayed
+			 * fput to avoid leaking *file.
+			 */
+		}
+
+		if (llist_add(&file->f_u.fu_llist, &delayed_fput_list))
+			schedule_delayed_work(&delayed_fput_work, 1);
+	}
+
+	put_task_struct(task);
+}
+EXPORT_SYMBOL(fput_by_pid);
+#endif
+
 /*
  * synchronous analog of fput(); for kernel threads that might be needed
  * in some umount() (and thus can't use flush_delayed_fput() without

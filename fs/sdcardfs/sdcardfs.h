@@ -46,6 +46,10 @@
 #include <linux/string.h>
 #include <linux/list.h>
 #include "multiuser.h"
+#ifdef SDCARDFS_SYSFS_FEATURE
+#include <linux/kobject.h>
+#endif
+
 
 /* the file system name */
 #define SDCARDFS_NAME "sdcardfs"
@@ -151,6 +155,11 @@ extern struct inode *sdcardfs_iget(struct super_block *sb,
 extern int sdcardfs_interpose(struct dentry *dentry, struct super_block *sb,
 			    struct path *lower_path, userid_t id);
 
+/* xattr.c */
+extern const struct xattr_handler *sdcardfs_xattr_handlers[];
+extern ssize_t sdcardfs_listxattr(struct dentry *dentry,
+		char *list, size_t size);
+
 /* file private data */
 struct sdcardfs_file_info {
 	struct file *lower_file;
@@ -197,7 +206,6 @@ struct sdcardfs_mount_options {
 	bool multiuser;
 	bool gid_derivation;
 	bool default_normal;
-	bool unshared_obb;
 	unsigned int reserved_mb;
 	bool nocache;
 };
@@ -223,6 +231,13 @@ struct sdcardfs_sb_info {
 	struct path obbpath;
 	void *pkgl_id;
 	struct list_head list;
+#ifdef SDCARDFS_SYSFS_FEATURE
+	struct kobject kobj;
+#endif
+
+#ifdef SDCARDFS_PLUGIN_PRIVACY_SPACE
+	int blocked_userid, appid_excluded;
+#endif
 };
 
 /*
@@ -493,6 +508,14 @@ extern appid_t is_excluded(const char *app_name, userid_t userid);
 extern int check_caller_access_to_name(struct inode *parent_node, const struct qstr *name);
 extern int packagelist_init(void);
 extern void packagelist_exit(void);
+
+
+/* sysfs.c */
+#ifdef SDCARDFS_SYSFS_FEATURE
+extern int sdcardfs_sysfs_init(void);
+extern void sdcardfs_sysfs_exit(void);
+extern int sdcardfs_sysfs_register_sb(struct super_block *);
+#endif
 
 /* for derived_perm.c */
 #define BY_NAME		(1 << 0)

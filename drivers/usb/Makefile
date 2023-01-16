@@ -7,6 +7,8 @@
 obj-$(CONFIG_USB)		+= core/
 obj-$(CONFIG_USB_SUPPORT)	+= phy/
 
+obj-$(CONFIG_USB_PROXY_HCD)	+= proxy-hcd/
+obj-$(CONFIG_HISI_USB_TYPEC)	+= hisi-usb-typec/
 obj-$(CONFIG_USB_DWC3)		+= dwc3/
 obj-$(CONFIG_USB_DWC2)		+= dwc2/
 obj-$(CONFIG_USB_ISP1760)	+= isp1760/
@@ -61,3 +63,4 @@ obj-$(CONFIG_USB_GADGET)	+= gadget/
 obj-$(CONFIG_USB_COMMON)	+= common/
 
 obj-$(CONFIG_USBIP_CORE)	+= usbip/
+obj-$(CONFIG_USB_SUSB_HDRC)	+= susb/

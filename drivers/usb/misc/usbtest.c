@@ -1654,10 +1654,10 @@ static int verify_halted(struct usbtest_dev *tdev, int ep, struct urb *urb)
 		return -EINVAL;
 	}
 	retval = simple_io(tdev, urb, 1, 0, -EPIPE, __func__);
-	if (retval != -EPIPE)
+	if ((retval != -EPIPE) && (retval != -EPROTO))
 		return -EINVAL;
 	retval = simple_io(tdev, urb, 1, 0, -EPIPE, "verify_still_halted");
-	if (retval != -EPIPE)
+	if ((retval != -EPIPE) && (retval != -EPROTO))
 		return -EINVAL;
 	return 0;
 }
@@ -2571,10 +2571,6 @@ usbtest_ioctl(struct usb_interface *intf, unsigned int code, void *buf)
 	 * altsettings; force a default so most tests don't need to check.
 	 */
 	if (dev->info->alt >= 0) {
-		if (intf->altsetting->desc.bInterfaceNumber) {
-			retval = -ENODEV;
-			goto free_mutex;
-		}
 		retval = set_altsetting(dev, dev->info->alt);
 		if (retval) {
 			dev_err(&intf->dev,
@@ -2679,7 +2675,11 @@ usbtest_probe(struct usb_interface *intf, const struct usb_device_id *id)
 	if (!dev)
 		return -ENOMEM;
 	info = (struct usbtest_info *) id->driver_info;
-	dev->info = info;
+	dev->info = kzalloc(sizeof(*info), GFP_KERNEL);
+	if (!dev->info)
+		return  -ENOMEM;
+	memcpy(dev->info, info, sizeof(*info));
+
 	mutex_init(&dev->lock);
 
 	dev->intf = intf;
@@ -2771,6 +2771,7 @@ static void usbtest_disconnect(struct usb_interface *intf)
 
 	usb_set_intfdata(intf, NULL);
 	dev_dbg(&intf->dev, "disconnect\n");
+	kfree(dev->info);
 	kfree(dev);
 }
 

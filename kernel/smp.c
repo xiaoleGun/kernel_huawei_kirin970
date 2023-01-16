@@ -15,6 +15,9 @@
 #include <linux/cpu.h>
 #include <linux/sched.h>
 #include <linux/hypervisor.h>
+#ifdef CONFIG_HISI_CPU_ISOLATION
+#include <linux/suspend.h>
+#endif
 
 #include "smpboot.h"
 
@@ -721,6 +724,14 @@ void wake_up_all_idle_cpus(void)
 	for_each_online_cpu(cpu) {
 		if (cpu == smp_processor_id())
 			continue;
+
+#ifdef CONFIG_HISI_CPU_ISOLATION
+		if (suspend_freeze_state != FREEZE_STATE_ENTER &&
+		    cpu_isolated(cpu)) {
+			pr_err("wake_up_all_idle_cpus:%d isolated continue test\n", cpu);
+			//continue;
+		}
+#endif
 
 		wake_up_if_idle(cpu);
 	}

@@ -275,9 +275,19 @@
  */
 #ifndef RO_AFTER_INIT_DATA
 #define RO_AFTER_INIT_DATA						\
-	__start_data_ro_after_init = .;					\
-	*(.data..ro_after_init)						\
-	__end_data_ro_after_init = .;
+	*(.data..ro_after_init)
+#endif
+
+#ifndef RO_AFTER_INIT_SECTION
+#define RO_AFTER_INIT_SECTION(align)					\
+	. = ALIGN((align));						\
+	/* RO after init data section */				\
+	.ro_after_init_data : AT(ADDR(.ro_after_init_data) - LOAD_OFFSET) { \
+		VMLINUX_SYMBOL(__start_data_ro_after_init) = .;		\
+		RO_AFTER_INIT_DATA					\
+		. = ALIGN((align));					\
+		VMLINUX_SYMBOL(__end_data_ro_after_init) = .;		\
+	}
 #endif
 
 /*
@@ -288,7 +298,6 @@
 	.rodata           : AT(ADDR(.rodata) - LOAD_OFFSET) {		\
 		VMLINUX_SYMBOL(__start_rodata) = .;			\
 		*(.rodata) *(.rodata.*)					\
-		RO_AFTER_INIT_DATA	/* Read only after init */	\
 		*(__vermagic)		/* Kernel version magic */	\
 		. = ALIGN(8);						\
 		VMLINUX_SYMBOL(__start___tracepoints_ptrs) = .;		\
@@ -468,6 +477,26 @@
 	MEM_KEEP(init.text)						\
 	MEM_KEEP(exit.text)						\
 
+#ifdef CONFIG_TEE_CFC
+#define CFC_TEXT							\
+	. = ALIGN(1 << CONFIG_TZDRIVER_CODE_ALIGN_SHIFT);		\
+	VMLINUX_SYMBOL(__cfc_area_start) = .;				\
+	VMLINUX_SYMBOL(__cfc_audit_start) = .;				\
+	*(.cfc.entries.text)						\
+	VMLINUX_SYMBOL(__cfc_audit_stop) = .;				\
+	*(.cfc.text)							\
+	. = ALIGN(1 << CONFIG_TZDRIVER_CODE_ALIGN_SHIFT);		\
+	VMLINUX_SYMBOL(__cfc_area_stop) = .;
+
+#define CFC_DATA							\
+	. = ALIGN(PAGE_SIZE);						\
+	VMLINUX_SYMBOL(__cfc_rules_start) = .;				\
+	*(.cfc.auditrules)						\
+	VMLINUX_SYMBOL(__cfc_rules_stop) = .;
+#else
+#define CFC_TEXT
+#define CFC_DATA
+#endif
 
 /* sched.text is aling to function alignment to secure we have same
  * address even at second ld pass when generating System.map */

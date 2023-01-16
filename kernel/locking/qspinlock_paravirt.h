@@ -88,6 +88,11 @@ static __always_inline void set_pending(struct qspinlock *lock)
 	WRITE_ONCE(lock->pending, 1);
 }
 
+static __always_inline void clear_pending(struct qspinlock *lock)
+{
+	WRITE_ONCE(lock->pending, 0);
+}
+
 /*
  * The pending bit check in pv_queued_spin_steal_lock() isn't a memory
  * barrier. Therefore, an atomic cmpxchg() is used to acquire the lock
@@ -103,6 +108,11 @@ static __always_inline int trylock_clear_pending(struct qspinlock *lock)
 static __always_inline void set_pending(struct qspinlock *lock)
 {
 	atomic_or(_Q_PENDING_VAL, &lock->val);
+}
+
+static __always_inline void clear_pending(struct qspinlock *lock)
+{
+	atomic_andnot(_Q_PENDING_VAL, &lock->val);
 }
 
 static __always_inline int trylock_clear_pending(struct qspinlock *lock)

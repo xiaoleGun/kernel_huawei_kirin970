@@ -23,12 +23,12 @@
 #define cfi_slowpath_handler	__cfi_slowpath
 #endif /* CONFIG_CFI_PERMISSIVE */
 
-static inline void handle_cfi_failure(void *ptr)
+static inline void handle_cfi_failure()
 {
 #ifdef CONFIG_CFI_PERMISSIVE
-	WARN_RATELIMIT(1, "CFI failure (target: [<%px>] %pF):\n", ptr, ptr);
+	WARN_RATELIMIT(1, "CFI failure:\n");
 #else
-	pr_err("CFI failure (target: [<%px>] %pF):\n", ptr, ptr);
+	pr_err("CFI failure:\n");
 	BUG();
 #endif
 }
@@ -282,18 +282,18 @@ void cfi_slowpath_handler(uint64_t id, void *ptr, void *diag)
 	if (likely(check))
 		check(id, ptr, diag);
 	else /* Don't allow unchecked modules */
-		handle_cfi_failure(ptr);
+		handle_cfi_failure();
 }
 EXPORT_SYMBOL(cfi_slowpath_handler);
 #endif /* CONFIG_MODULES */
 
-void cfi_failure_handler(void *data, void *ptr, void *vtable)
+void cfi_failure_handler(void *data, void *value, void *vtable)
 {
-	handle_cfi_failure(ptr);
+	handle_cfi_failure();
 }
 EXPORT_SYMBOL(cfi_failure_handler);
 
-void __cfi_check_fail(void *data, void *ptr)
+void __cfi_check_fail(void *data, void *value)
 {
-	handle_cfi_failure(ptr);
+	handle_cfi_failure();
 }

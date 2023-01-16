@@ -28,6 +28,10 @@
 #include <linux/of.h>
 #include "governor.h"
 
+#ifdef CONFIG_HISI_DRG
+#include <linux/hisi/hisi_drg.h>
+#endif
+
 static struct class *devfreq_class;
 
 /*
@@ -263,6 +267,10 @@ int update_devfreq(struct devfreq *devfreq)
 		flags |= DEVFREQ_FLAG_LEAST_UPPER_BOUND; /* Use LUB */
 	}
 
+#ifdef CONFIG_HISI_DRG
+	freq = drg_devfreq_check_limit(devfreq, freq);
+#endif
+
 	if (devfreq->profile->get_cur_freq)
 		devfreq->profile->get_cur_freq(devfreq->dev.parent, &cur_freq);
 	else
@@ -291,6 +299,74 @@ int update_devfreq(struct devfreq *devfreq)
 	return err;
 }
 EXPORT_SYMBOL(update_devfreq);
+
+#ifdef CONFIG_ARCH_HISI
+void devfreq_apply_limits(struct devfreq *devfreq)
+{
+	struct devfreq_freqs freqs;
+	unsigned long freq, cur_freq;
+	int err;
+	u32 flags = 0;
+
+	if (!devfreq)
+		return;
+
+	mutex_lock(&devfreq->lock);
+	if (!devfreq->governor || !devfreq->profile)
+		goto out;
+
+	if (devfreq->profile->get_cur_freq)
+		devfreq->profile->get_cur_freq(devfreq->dev.parent, &cur_freq);
+	else
+		cur_freq = devfreq->previous_freq;
+
+	freq = cur_freq;
+	devfreq->governor->event_handler(devfreq, DEVFREQ_GOV_LIMITS, &freq);
+
+	/*
+	 * Adjust the frequency with user freq and QoS.
+	 *
+	 * List from the highest priority
+	 * max_freq
+	 * min_freq
+	 */
+	if (devfreq->min_freq && freq < devfreq->min_freq) {
+		freq = devfreq->min_freq;
+		flags &= ~DEVFREQ_FLAG_LEAST_UPPER_BOUND; /* Use GLB */
+	}
+	if (devfreq->max_freq && freq > devfreq->max_freq) {
+		freq = devfreq->max_freq;
+		flags |= DEVFREQ_FLAG_LEAST_UPPER_BOUND; /* Use LUB */
+	}
+
+#ifdef CONFIG_HISI_DRG
+	freq = drg_devfreq_check_limit(devfreq, freq);
+#endif
+
+	freqs.old = cur_freq;
+	freqs.new = freq;
+	devfreq_notify_transition(devfreq, &freqs, DEVFREQ_PRECHANGE);
+
+	err = devfreq->profile->target(devfreq->dev.parent, &freq, flags);
+	if (err) {
+		freqs.new = cur_freq;
+		devfreq_notify_transition(devfreq, &freqs, DEVFREQ_POSTCHANGE);
+		goto out;
+	}
+
+	freqs.new = freq;
+	devfreq_notify_transition(devfreq, &freqs, DEVFREQ_POSTCHANGE);
+
+	if (devfreq->profile->freq_table)
+		if (devfreq_update_status(devfreq, freq))
+			dev_err(&devfreq->dev,
+				"Couldn't update frequency transition information.\n");
+
+	devfreq->previous_freq = freq;
+out:
+	mutex_unlock(&devfreq->lock);
+}
+#endif
 
 /**
  * devfreq_monitor() - Periodically poll devfreq objects.
@@ -929,6 +1005,9 @@ static ssize_t governor_store(struct device *dev, struct device_attribute *attr,
 	int ret;
 	char str_governor[DEVFREQ_NAME_LEN + 1];
 	struct devfreq_governor *governor;
+#ifdef CONFIG_ARCH_HISI
+	const struct devfreq_governor *old_governor;
+#endif
 
 	ret = sscanf(buf, "%" __stringify(DEVFREQ_NAME_LEN) "s", str_governor);
 	if (ret != 1)
@@ -957,12 +1036,21 @@ static ssize_t governor_store(struct device *dev, struct device_attribute *attr,
 			goto out;
 		}
 	}
+#ifdef CONFIG_ARCH_HISI
+	old_governor = df->governor;
+#endif
 	df->governor = governor;
 	strncpy(df->governor_name, governor->name, DEVFREQ_NAME_LEN);
 	ret = df->governor->event_handler(df, DEVFREQ_GOV_START, NULL);
-	if (ret)
+	if (ret) {
 		dev_warn(dev, "%s: Governor %s not started(%d)\n",
 			 __func__, df->governor->name, ret);
+#ifdef CONFIG_ARCH_HISI
+		df->governor = old_governor;
+		strncpy(df->governor_name, old_governor->name, DEVFREQ_NAME_LEN);
+		ret = df->governor->event_handler(df, DEVFREQ_GOV_START, NULL);
+#endif
+	}
 out:
 	mutex_unlock(&devfreq_list_lock);
 
@@ -1137,19 +1225,26 @@ static ssize_t available_frequencies_show(struct device *d,
 	struct devfreq *df = to_devfreq(d);
 	struct device *dev = df->dev.parent;
 	struct dev_pm_opp *opp;
+	unsigned int i = 0, max_state = df->profile->max_state;
+	bool use_opp;
 	ssize_t count = 0;
 	unsigned long freq = 0;
 
 	rcu_read_lock();
-	do {
-		opp = dev_pm_opp_find_freq_ceil(dev, &freq);
-		if (IS_ERR(opp))
-			break;
+	use_opp = dev_pm_opp_get_opp_count(dev) > 0;
+	while (use_opp || (!use_opp && i < max_state)) {
+		if (use_opp) {
+			opp = dev_pm_opp_find_freq_ceil(dev, &freq);
+			if (IS_ERR(opp))
+				break;
+		} else {
+			freq = df->profile->freq_table[i++];
+		}
 
 		count += scnprintf(&buf[count], (PAGE_SIZE - count - 2),
 				   "%lu ", freq);
 		freq++;
-	} while (1);
+	}
 	rcu_read_unlock();
 
 	/* Truncate the trailing space */

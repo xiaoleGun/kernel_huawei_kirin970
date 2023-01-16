@@ -16,12 +16,13 @@
  */
 
 #include <linux/platform_device.h>
+#include <linux/of_device.h>
 
 #include "core.h"
 
 int dwc3_host_init(struct dwc3 *dwc)
 {
-	struct property_entry	props[3];
+	struct property_entry	props[6];
 	struct platform_device	*xhci;
 	int			ret, irq;
 	struct resource		*res;
@@ -73,11 +74,10 @@ int dwc3_host_init(struct dwc3 *dwc)
 		return -ENOMEM;
 	}
 
-	dma_set_coherent_mask(&xhci->dev, dwc->dev->coherent_dma_mask);
+	/* config dma of xhci device */
+	of_dma_configure(&xhci->dev, dwc->dev->of_node);
 
 	xhci->dev.parent	= dwc->dev;
-	xhci->dev.dma_mask	= dwc->dev->dma_mask;
-	xhci->dev.dma_parms	= dwc->dev->dma_parms;
 
 	dwc->xhci = xhci;
 
@@ -92,6 +92,15 @@ int dwc3_host_init(struct dwc3 *dwc)
 
 	if (dwc->usb3_lpm_capable)
 		props[prop_idx++].name = "usb3-lpm-capable";
+
+	if (dwc->ctrl_nyet_abnormal)
+		props[prop_idx++].name = "ctrl-nyet-abnormal";
+
+	if (dwc->warm_reset_after_init)
+		props[prop_idx++].name = "warm-reset-after-init";
+
+	if (dwc->xhci_delay_ctrl_data_stage)
+		props[prop_idx++].name = "xhci-delay-ctrl-data-stage";
 
 	/**
 	 * WORKAROUND: dwc3 revisions <=3.00a have a limitation

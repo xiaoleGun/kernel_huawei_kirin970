@@ -1371,9 +1371,6 @@ static void nic_remove(struct pci_dev *pdev)
 {
 	struct nicpf *nic = pci_get_drvdata(pdev);
 
-	if (!nic)
-		return;
-
 	if (nic->flags & NIC_SRIOV_ENABLED)
 		pci_disable_sriov(pdev);
 

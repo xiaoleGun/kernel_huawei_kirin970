@@ -428,7 +428,7 @@
 		      "dclkin.0", "dclkin.1";
 
 	ports {
-		port@0 {
+		port@1 {
 			endpoint {
 				remote-endpoint = <&adv7511_in>;
 			};

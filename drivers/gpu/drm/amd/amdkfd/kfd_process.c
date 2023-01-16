@@ -124,8 +124,6 @@ struct kfd_process *kfd_get_process(const struct task_struct *thread)
 		return ERR_PTR(-EINVAL);
 
 	process = find_process(thread);
-	if (!process)
-		return ERR_PTR(-EINVAL);
 
 	return process;
 }
@@ -319,8 +317,7 @@ static struct kfd_process *create_process(const struct task_struct *thread)
 
 	/* init process apertures*/
 	process->is_32bit_user_mode = in_compat_syscall();
-	err = kfd_init_apertures(process);
-	if (err != 0)
+	if (kfd_init_apertures(process) != 0)
 		goto err_init_apretures;
 
 	return process;

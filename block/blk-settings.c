@@ -88,7 +88,7 @@ void blk_set_default_limits(struct queue_limits *lim)
 {
 	lim->max_segments = BLK_MAX_SEGMENTS;
 	lim->max_integrity_segments = 0;
-	lim->seg_boundary_mask = BLK_SEG_BOUNDARY_MASK;
+	lim->seg_boundary_mask = BLK_SEG_BOUNDARY_MASK;/*lint !e570 */
 	lim->virt_boundary_mask = 0;
 	lim->max_segment_size = BLK_MAX_SEGMENT_SIZE;
 	lim->max_sectors = lim->max_hw_sectors = BLK_SAFE_MAX_SECTORS;
@@ -102,7 +102,7 @@ void blk_set_default_limits(struct queue_limits *lim)
 	lim->discard_misaligned = 0;
 	lim->discard_zeroes_data = 0;
 	lim->logical_block_size = lim->physical_block_size = lim->io_min = 512;
-	lim->bounce_pfn = (unsigned long)(BLK_BOUNCE_ANY >> PAGE_SHIFT);
+	lim->bounce_pfn = (unsigned long)(BLK_BOUNCE_ANY >> PAGE_SHIFT);/*lint !e501 */
 	lim->alignment_offset = 0;
 	lim->io_opt = 0;
 	lim->misaligned = 0;
@@ -172,7 +172,7 @@ void blk_queue_make_request(struct request_queue *q, make_request_fn *mfn)
 	/*
 	 * by default assume old behaviour and bounce for any highmem page
 	 */
-	blk_queue_bounce_limit(q, BLK_BOUNCE_HIGH);
+	blk_queue_bounce_limit(q, BLK_BOUNCE_HIGH);/*lint !e501 */
 }
 EXPORT_SYMBOL(blk_queue_make_request);
 
@@ -193,13 +193,13 @@ void blk_queue_bounce_limit(struct request_queue *q, u64 max_addr)
 	int dma = 0;
 
 	q->bounce_gfp = GFP_NOIO;
-#if BITS_PER_LONG == 64
+#ifdef CONFIG_MMC_BLOCK_IOMMU_64BIT
 	/*
 	 * Assume anything <= 4GB can be handled by IOMMU.  Actually
 	 * some IOMMUs can handle everything, but I don't know of a
 	 * way to test this here.
 	 */
-	if (b_pfn < (min_t(u64, 0xffffffffUL, BLK_BOUNCE_HIGH) >> PAGE_SHIFT))
+	if (b_pfn < (min_t(u64, 0xffffffffUL, BLK_BOUNCE_HIGH) >> PAGE_SHIFT))/*lint !e501 */
 		dma = 1;
 	q->limits.bounce_pfn = max(max_low_pfn, b_pfn);
 #else
@@ -239,7 +239,7 @@ void blk_queue_max_hw_sectors(struct request_queue *q, unsigned int max_hw_secto
 	struct queue_limits *limits = &q->limits;
 	unsigned int max_sectors;
 
-	if ((max_hw_sectors << 9) < PAGE_SIZE) {
+	if ((max_hw_sectors << 9) < PAGE_SIZE) {/*lint !e647 */
 		max_hw_sectors = 1 << (PAGE_SHIFT - 9);
 		printk(KERN_INFO "%s: set to minimum %d\n",
 		       __func__, max_hw_sectors);
@@ -518,7 +518,8 @@ EXPORT_SYMBOL(blk_queue_stack_limits);
 int blk_stack_limits(struct queue_limits *t, struct queue_limits *b,
 		     sector_t start)
 {
-	unsigned int top, bottom, alignment, ret = 0;
+	unsigned int top, bottom, alignment;
+	int ret = 0;
 
 	t->max_sectors = min_not_zero(t->max_sectors, b->max_sectors);
 	t->max_hw_sectors = min_not_zero(t->max_hw_sectors, b->max_hw_sectors);
@@ -811,6 +812,7 @@ EXPORT_SYMBOL(blk_queue_dma_alignment);
  *    alignments without having them interfere.
  *
  **/
+ /*lint -save -e574*/
 void blk_queue_update_dma_alignment(struct request_queue *q, int mask)
 {
 	BUG_ON(mask > PAGE_SIZE);
@@ -819,6 +821,7 @@ void blk_queue_update_dma_alignment(struct request_queue *q, int mask)
 		q->dma_alignment = mask;
 }
 EXPORT_SYMBOL(blk_queue_update_dma_alignment);
+/*lint -restore*/
 
 void blk_queue_flush_queueable(struct request_queue *q, bool queueable)
 {
@@ -830,6 +833,19 @@ void blk_queue_flush_queueable(struct request_queue *q, bool queueable)
 	spin_unlock_irq(q->queue_lock);
 }
 EXPORT_SYMBOL_GPL(blk_queue_flush_queueable);
+
+/**
+ * blk_set_queue_depth - tell the block layer about the device queue depth
+ * @q:          the request queue for the device
+ * @depth:      queue depth
+ *
+ */
+void blk_set_queue_depth(struct request_queue *q, unsigned int depth)
+{
+	q->queue_depth = depth;
+	wbt_set_queue_depth(q->rq_wb, depth);
+}
+EXPORT_SYMBOL(blk_set_queue_depth);
 
 /**
  * blk_queue_write_cache - configure queue's write cache

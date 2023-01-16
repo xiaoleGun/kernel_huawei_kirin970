@@ -529,6 +529,13 @@ struct dm_table *dm_swap_table(struct mapped_device *md,
  */
 void *dm_vcalloc(unsigned long nmemb, unsigned long elem_size);
 
+#ifdef CONFIG_HUAWEI_STORAGE_ROFA
+/*
+ * Get the split bio's base bio for encryption info
+ */
+const struct bio *dm_get_tio_bio(struct bio *bio);
+#endif
+
 /*-----------------------------------------------------------------
  * Macros.
  *---------------------------------------------------------------*/

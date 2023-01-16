@@ -40,6 +40,9 @@
 #include <linux/log2.h>
 #include <linux/inetdevice.h>
 #include <net/addrconf.h>
+#ifdef CONFIG_HUAWEI_XENGINE
+#include <huawei_platform/emcom/emcom_xengine.h>
+#endif
 
 #define DEBUG
 #define NEIGH_DEBUG 1
@@ -1138,12 +1141,6 @@ int neigh_update(struct neighbour *neigh, const u8 *lladdr, u8 new,
 		lladdr = neigh->ha;
 	}
 
-	/* Update confirmed timestamp for neighbour entry after we
-	 * received ARP packet even if it doesn't change IP to MAC binding.
-	 */
-	if (new & NUD_CONNECTED)
-		neigh->confirmed = jiffies;
-
 	/* If entry was valid and address is not changed,
 	   do not change entry state, if new one is STALE.
 	 */
@@ -1165,12 +1162,15 @@ int neigh_update(struct neighbour *neigh, const u8 *lladdr, u8 new,
 		}
 	}
 
-	/* Update timestamp only once we know we will make a change to the
+	/* Update timestamps only once we know we will make a change to the
 	 * neighbour entry. Otherwise we risk to move the locktime window with
 	 * noop updates and ignore relevant ARP updates.
 	 */
-	if (new != old || lladdr != neigh->ha)
+	if (new != old || lladdr != neigh->ha) {
+		if (new & NUD_CONNECTED)
+			neigh->confirmed = jiffies;
 		neigh->updated = jiffies;
+	}
 
 	if (new != old) {
 		neigh_del_timer(neigh);
@@ -1322,7 +1322,12 @@ int neigh_resolve_output(struct neighbour *neigh, struct sk_buff *skb)
 		} while (read_seqretry(&neigh->ha_lock, seq));
 
 		if (err >= 0)
+		{
+#ifdef CONFIG_HUAWEI_XENGINE
+			Emcom_Xengine_UdpEnqueue(skb);
+#endif
 			rc = dev_queue_xmit(skb);
+		}
 		else
 			goto out_kfree_skb;
 	}

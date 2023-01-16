@@ -813,17 +813,6 @@ static irqreturn_t au1xmmc_irq(int irq, void *dev_id)
 		/* IRQ_OFF(host, SD_CONFIG_TH | SD_CONFIG_RA | SD_CONFIG_RF); */
 		tasklet_schedule(&host->finish_task);
 	}
-#if 0
-	else if (status & SD_STATUS_DD) {
-		/* Sometimes we get a DD before a NE in PIO mode */
-		if (!(host->flags & HOST_F_DMA) && (status & SD_STATUS_NE))
-			au1xmmc_receive_pio(host);
-		else {
-			au1xmmc_data_complete(host, status);
-			/* tasklet_schedule(&host->data_task); */
-		}
-	}
-#endif
 	else if (status & SD_STATUS_CR) {
 		if (host->status == HOST_S_CMD)
 			au1xmmc_cmd_complete(host, status);

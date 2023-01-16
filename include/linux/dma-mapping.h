@@ -250,7 +250,9 @@ static inline dma_addr_t dma_map_page(struct device *dev, struct page *page,
 	struct dma_map_ops *ops = get_dma_ops(dev);
 	dma_addr_t addr;
 
+#ifndef CONFIG_HISI_LB
 	kmemcheck_mark_initialized(page_address(page) + offset, size);
+#endif
 	BUG_ON(!valid_dma_direction(dir));
 	addr = ops->map_page(dev, page, offset, size, dir, 0);
 	debug_dma_map_page(dev, page, offset, size, dir, addr, false);

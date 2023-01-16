@@ -92,7 +92,13 @@ struct inet_request_sock {
 				wscale_ok  : 1,
 				ecn_ok	   : 1,
 				acked	   : 1,
+#ifdef CONFIG_MPTCP
+				no_srccheck: 1,
+				mptcp_rqsk : 1,
+				saw_mpc    : 1;
+#else
 				no_srccheck: 1;
+#endif
 	kmemcheck_bitfield_end(flags);
 	u32                     ir_mark;
 	union {
@@ -130,6 +136,12 @@ static inline int inet_request_bound_dev_if(const struct sock *sk,
 #endif
 
 	return sk->sk_bound_dev_if;
+}
+
+static inline struct ip_options_rcu *ireq_opt_deref(const struct inet_request_sock *ireq)
+{
+	return rcu_dereference_check(ireq->ireq_opt,
+				     atomic_read(&ireq->req.rsk_refcnt) > 0);
 }
 
 struct inet_cork {

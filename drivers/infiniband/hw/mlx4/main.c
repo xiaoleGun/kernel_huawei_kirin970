@@ -216,6 +216,8 @@ static int mlx4_ib_update_gids_v1_v2(struct gid_entry *gids,
 			gid_tbl[i].version = 2;
 			if (!ipv6_addr_v4mapped((struct in6_addr *)&gids[i].gid))
 				gid_tbl[i].type = 1;
+			else
+				memset(&gid_tbl[i].gid, 0, 12);
 		}
 	}
 
@@ -361,13 +363,8 @@ static int mlx4_ib_del_gid(struct ib_device *device,
 		if (!gids) {
 			ret = -ENOMEM;
 		} else {
-			for (i = 0; i < MLX4_MAX_PORT_GIDS; i++) {
-				memcpy(&gids[i].gid,
-				       &port_gid_table->gids[i].gid,
-				       sizeof(union ib_gid));
-				gids[i].gid_type =
-				    port_gid_table->gids[i].gid_type;
-			}
+			for (i = 0; i < MLX4_MAX_PORT_GIDS; i++)
+				memcpy(&gids[i].gid, &port_gid_table->gids[i].gid, sizeof(union ib_gid));
 		}
 	}
 	spin_unlock_bh(&iboe->lock);
@@ -1171,7 +1168,7 @@ static void mlx4_ib_disassociate_ucontext(struct ib_ucontext *ibcontext)
 	/* need to protect from a race on closing the vma as part of
 	 * mlx4_ib_vma_close().
 	 */
-	down_write(&owning_mm->mmap_sem);
+	down_read(&owning_mm->mmap_sem);
 	for (i = 0; i < HW_BAR_COUNT; i++) {
 		vma = context->hw_bar_info[i].vma;
 		if (!vma)
@@ -1185,13 +1182,11 @@ static void mlx4_ib_disassociate_ucontext(struct ib_ucontext *ibcontext)
 			BUG_ON(1);
 		}
 
-		context->hw_bar_info[i].vma->vm_flags &=
-			~(VM_SHARED | VM_MAYSHARE);
 		/* context going to be destroyed, should not access ops any more */
 		context->hw_bar_info[i].vma->vm_ops = NULL;
 	}
 
-	up_write(&owning_mm->mmap_sem);
+	up_read(&owning_mm->mmap_sem);
 	mmput(owning_mm);
 	put_task_struct(owning_process);
 }
@@ -2933,8 +2928,9 @@ err_steer_free_bitmap:
 	kfree(ibdev->ib_uc_qpns_bitmap);
 
 err_steer_qp_release:
-	mlx4_qp_release_range(dev, ibdev->steer_qpn_base,
-			      ibdev->steer_qpn_count);
+	if (ibdev->steering_support == MLX4_STEERING_MODE_DEVICE_MANAGED)
+		mlx4_qp_release_range(dev, ibdev->steer_qpn_base,
+				      ibdev->steer_qpn_count);
 err_counter:
 	for (i = 0; i < ibdev->num_ports; ++i)
 		mlx4_ib_delete_counters_table(ibdev, &ibdev->counters_table[i]);
@@ -3039,9 +3035,11 @@ static void mlx4_ib_remove(struct mlx4_dev *dev, void *ibdev_ptr)
 		ibdev->iboe.nb.notifier_call = NULL;
 	}
 
-	mlx4_qp_release_range(dev, ibdev->steer_qpn_base,
-			      ibdev->steer_qpn_count);
-	kfree(ibdev->ib_uc_qpns_bitmap);
+	if (ibdev->steering_support == MLX4_STEERING_MODE_DEVICE_MANAGED) {
+		mlx4_qp_release_range(dev, ibdev->steer_qpn_base,
+				      ibdev->steer_qpn_count);
+		kfree(ibdev->ib_uc_qpns_bitmap);
+	}
 
 	iounmap(ibdev->uar_map);
 	for (p = 0; p < ibdev->num_ports; ++p)

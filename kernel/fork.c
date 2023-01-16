@@ -76,8 +76,10 @@
 #include <linux/aio.h>
 #include <linux/compiler.h>
 #include <linux/sysctl.h>
+#include <linux/hisi/hisi_hkip.h>
 #include <linux/kcov.h>
-#include <linux/cpufreq_times.h>
+
+#include <linux/blk-cgroup.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -91,6 +93,19 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/task.h>
 
+#if ((defined(CONFIG_HW_VIP_THREAD)) || (defined(CONFIG_HW_QOS_THREAD)))
+#include <cpu_netlink/cpu_netlink.h>
+#endif
+#ifdef CONFIG_HW_CGROUP_PIDS
+#include <./cgroup_huawei/cgroup_pids.h>
+#endif
+#include <linux/cpufreq_times.h>
+#ifdef CONFIG_HWAA
+#include <huawei_platform/hwaa/hwaa_proc_hooks.h>
+#endif
+#ifdef CONFIG_HW_QOS_THREAD
+#include <chipset_common/hwqos/hwqos_common.h>
+#endif
 /*
  * Minimum number of threads to boot the kernel
  */
@@ -209,9 +224,13 @@ static unsigned long *alloc_thread_stack_node(struct task_struct *tsk, int node)
 		tsk->stack_vm_area = find_vm_area(stack);
 	return stack;
 #else
+#ifdef CONFIG_ALLOC_MEM_SUPPORT_4GPLUS
 	struct page *page = alloc_pages_node(node, THREADINFO_GFP,
 					     THREAD_SIZE_ORDER);
-
+#else
+	struct page *page = alloc_pages_node(node, THREADINFO_GFP | __GFP_HIGHMEM,
+					     THREAD_SIZE_ORDER);
+#endif
 	return page ? page_address(page) : NULL;
 #endif
 }
@@ -343,8 +362,6 @@ void put_task_stack(struct task_struct *tsk)
 
 void free_task(struct task_struct *tsk)
 {
-	cpufreq_task_times_exit(tsk);
-
 #ifndef CONFIG_THREAD_INFO_IN_TASK
 	/*
 	 * The task is finally done with both the stack and thread_info,
@@ -566,6 +583,9 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 					struct mm_struct *oldmm)
 {
 	struct vm_area_struct *mpnt, *tmp, *prev, **pprev;
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	struct vm_area_struct *last = NULL;
+#endif
 	struct rb_node **rb_link, *rb_parent;
 	int retval;
 	unsigned long charge;
@@ -620,7 +640,11 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		if (!tmp)
 			goto fail_nomem;
 		*tmp = *mpnt;
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+		INIT_VMA(tmp);
+#else
 		INIT_LIST_HEAD(&tmp->anon_vma_chain);
+#endif
 		retval = vma_dup_policy(mpnt, tmp);
 		if (retval)
 			goto fail_nomem_policy;
@@ -671,6 +695,15 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 		rb_parent = &tmp->vm_rb;
 
 		mm->map_count++;
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+		/*
+		 * Mark this VMA as changing to prevent the
+		 * speculative page fault hanlder to process
+		 * it until the TLB are flushed below.
+		 */
+		last = mpnt;
+		vm_write_begin(mpnt);
+#endif
 		retval = copy_page_range(mm, oldmm, mpnt);
 
 		if (tmp->vm_ops && tmp->vm_ops->open)
@@ -685,6 +718,13 @@ static __latent_entropy int dup_mmap(struct mm_struct *mm,
 out:
 	up_write(&mm->mmap_sem);
 	flush_tlb_mm(oldmm);
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	for (; last; last = last->vm_prev) {
+		if (last->vm_flags & VM_DONTCOPY)
+			continue;
+		vm_write_end(last);
+	}
+#endif
 	up_write(&oldmm->mmap_sem);
 fail_uprobe_end:
 	uprobe_end_dup_mmap();
@@ -770,6 +810,9 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	mm->mmap = NULL;
 	mm->mm_rb = RB_ROOT;
 	mm->vmacache_seqnum = 0;
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	rwlock_init(&mm->mm_rb_lock);
+#endif
 	atomic_set(&mm->mm_users, 1);
 	atomic_set(&mm->mm_count, 1);
 	init_rwsem(&mm->mmap_sem);
@@ -792,6 +835,9 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	mm->pmd_huge_pte = NULL;
 #endif
 	mm_init_uprobes_state(mm);
+#ifdef CONFIG_TASK_PROTECT_LRU
+	mm->protect = 0;
+#endif
 
 	if (current->mm) {
 		mm->flags = current->mm->flags & MMF_INIT_MASK;
@@ -804,13 +850,24 @@ static struct mm_struct *mm_init(struct mm_struct *mm, struct task_struct *p,
 	if (mm_alloc_pgd(mm))
 		goto fail_nopgd;
 
-	if (init_new_context(p, mm))
+#ifdef CONFIG_BLK_DEV_THROTTLING
+	mm->io_limit = kmalloc(sizeof(struct blk_throtl_io_limit), GFP_KERNEL);
+	if (!mm->io_limit)
 		goto fail_nocontext;
+
+	blk_throtl_io_limit_init(mm->io_limit);
+#endif
+	if (init_new_context(p, mm))
+		goto fail_io_limit;
 
 	mm->user_ns = get_user_ns(user_ns);
 	return mm;
 
+fail_io_limit:
+#ifdef CONFIG_BLK_DEV_THROTTLING
+	kfree(mm->io_limit);
 fail_nocontext:
+#endif
 	mm_free_pgd(mm);
 fail_nopgd:
 	free_mm(mm);
@@ -869,6 +926,9 @@ void __mmdrop(struct mm_struct *mm)
 	mmu_notifier_mm_destroy(mm);
 	check_mm(mm);
 	put_user_ns(mm->user_ns);
+#ifdef CONFIG_BLK_DEV_THROTTLING
+	blk_throtl_io_limit_put(mm->io_limit);
+#endif
 	free_mm(mm);
 }
 EXPORT_SYMBOL_GPL(__mmdrop);
@@ -1383,6 +1443,10 @@ static int copy_signal(unsigned long clone_flags, struct task_struct *tsk)
 	tty_audit_fork(sig);
 	sched_autogroup_fork(sig);
 
+#ifdef CONFIG_HW_DIE_CATCH
+	sig->unexpected_die_catch_flags = 0; /*all new child don't inherit it*/
+#endif
+
 	sig->oom_score_adj = current->signal->oom_score_adj;
 	sig->oom_score_adj_min = current->signal->oom_score_adj_min;
 
@@ -1463,6 +1527,10 @@ init_task_pid(struct task_struct *task, enum pid_type type, struct pid *pid)
 	 task->pids[type].pid = pid;
 }
 
+#ifdef CONFIG_HW_VIP_THREAD
+#include <chipset_common/hwcfs/hwcfs_fork.h>
+#endif
+
 /*
  * This creates a new process as a copy of the old one,
  * but does not actually start it yet.
@@ -1535,8 +1603,9 @@ static __latent_entropy struct task_struct *copy_process(
 	if (!p)
 		goto fork_out;
 
-	cpufreq_task_times_init(p);
-
+	retval = hkip_check_xid_root();
+	if (retval)
+		goto bad_fork_free;
 	/*
 	 * This _must_ happen before we call free_task(), i.e. before we jump
 	 * to any of the bad_fork_* labels. This is to avoid freeing
@@ -1565,11 +1634,19 @@ static __latent_entropy struct task_struct *copy_process(
 			goto bad_fork_free;
 	}
 	current->flags &= ~PF_NPROC_EXCEEDED;
+#ifdef CONFIG_HW_CGROUP_PIDS
+        retval = cgroup_pids_can_fork();
+        if (retval < 0)
+                goto bad_fork_free;
 
-	retval = copy_creds(p, clone_flags);
-	if (retval < 0)
-		goto bad_fork_free;
-
+        retval = copy_creds(p, clone_flags);
+        if (retval < 0)
+                goto bad_fork_cleanup_cgroup_pids;
+#else
+        retval = copy_creds(p, clone_flags);
+        if (retval < 0)
+                goto bad_fork_free;
+#endif
 	/*
 	 * If multiple threads are within copy_process(), then this check
 	 * triggers too late. This doesn't hurt, the check is only there
@@ -1594,6 +1671,9 @@ static __latent_entropy struct task_struct *copy_process(
 	p->utimescaled = p->stimescaled = 0;
 	prev_cputime_init(&p->prev_cputime);
 
+#ifdef CONFIG_CPU_FREQ_POWER_STAT
+	p->cpu_power = 0;
+#endif
 #ifdef CONFIG_VIRT_CPU_ACCOUNTING_GEN
 	seqcount_init(&p->vtime_seqcount);
 	p->vtime_snap = 0;
@@ -1611,8 +1691,6 @@ static __latent_entropy struct task_struct *copy_process(
 
 	posix_cpu_timers_init(p);
 
-	p->start_time = ktime_get_ns();
-	p->real_start_time = ktime_get_boot_ns();
 	p->io_context = NULL;
 	p->audit_context = NULL;
 	cgroup_fork(p);
@@ -1659,6 +1737,17 @@ static __latent_entropy struct task_struct *copy_process(
 #ifdef CONFIG_BCACHE
 	p->sequential_io	= 0;
 	p->sequential_io_avg	= 0;
+#endif
+#ifdef CONFIG_HISI_SWAP_ZDATA
+	p->proc_reclaimed_result = NULL;
+#endif
+
+#ifdef CONFIG_HW_VIP_THREAD
+	init_task_vip_info(p);
+#endif
+
+#ifdef CONFIG_CPU_FREQ_TIMES
+	cpufreq_task_times_init(p);
 #endif
 
 	/* Perform scheduler related setup. Assign this task to a CPU. */
@@ -1761,6 +1850,8 @@ static __latent_entropy struct task_struct *copy_process(
 	INIT_LIST_HEAD(&p->thread_group);
 	p->task_works = NULL;
 
+	hkip_init_task(p);
+
 	threadgroup_change_begin(current);
 	/*
 	 * Ensure that the cgroup subsystem policies allow the new process to be
@@ -1771,6 +1862,17 @@ static __latent_entropy struct task_struct *copy_process(
 	retval = cgroup_can_fork(p);
 	if (retval)
 		goto bad_fork_free_pid;
+
+	/*
+	 * From this point on we must avoid any synchronous user-space
+	 * communication until we take the tasklist-lock. In particular, we do
+	 * not want user-space to be able to predict the process start-time by
+	 * stalling fork(2) after we recorded the start_time but before it is
+	 * visible to the system.
+	 */
+
+	p->start_time = ktime_get_ns();
+	p->real_start_time = ktime_get_boot_ns();
 
 	/*
 	 * Make it visible to the rest of the system, but dont wake it up yet.
@@ -1852,6 +1954,12 @@ static __latent_entropy struct task_struct *copy_process(
 	write_unlock_irq(&tasklist_lock);
 
 	proc_fork_connector(p);
+#ifdef CONFIG_HW_QOS_THREAD
+	iaware_proc_fork_inherit(p, current);
+#endif
+#if ((defined(CONFIG_HW_VIP_THREAD)) || (defined(CONFIG_HW_QOS_THREAD)))
+	iaware_proc_fork_connector(p);
+#endif
 	cgroup_post_fork(p);
 	threadgroup_change_end(current);
 	perf_event_fork(p);
@@ -1895,6 +2003,9 @@ bad_fork_cleanup_audit:
 bad_fork_cleanup_perf:
 	perf_event_free_task(p);
 bad_fork_cleanup_policy:
+#ifdef CONFIG_CPU_FREQ_TIMES
+	cpufreq_task_times_exit(p);
+#endif
 #ifdef CONFIG_NUMA
 	mpol_put(p->mempolicy);
 bad_fork_cleanup_threadgroup_lock:
@@ -1903,6 +2014,10 @@ bad_fork_cleanup_threadgroup_lock:
 bad_fork_cleanup_count:
 	atomic_dec(&p->cred->user->processes);
 	exit_creds(p);
+#ifdef CONFIG_HW_CGROUP_PIDS
+bad_fork_cleanup_cgroup_pids:
+        cgroup_pids_cancel_fork();
+#endif
 bad_fork_free:
 	p->state = TASK_DEAD;
 	put_task_stack(p);
@@ -1980,13 +2095,14 @@ long _do_fork(unsigned long clone_flags,
 		struct completion vfork;
 		struct pid *pid;
 
-		cpufreq_task_times_alloc(p);
-
 		trace_sched_process_fork(current, p);
 
 		pid = get_task_pid(p, PIDTYPE_PID);
 		nr = pid_vnr(pid);
 
+#ifdef CONFIG_HWAA
+		hwaa_proc_on_task_forked(p);
+#endif
 		if (clone_flags & CLONE_PARENT_SETTID)
 			put_user(nr, parent_tidptr);
 

@@ -298,6 +298,13 @@ void cpuidle_install_idle_handler(void)
 /**
  * cpuidle_uninstall_idle_handler - uninstalls the cpuidle idle loop handler
  */
+#ifdef CONFIG_HISI_DPM_PLATFORM_VENUS
+int get_idle_initialized_value(void)
+{
+	return initialized;
+}
+#endif
+
 void cpuidle_uninstall_idle_handler(void)
 {
 	if (enabled_devices) {

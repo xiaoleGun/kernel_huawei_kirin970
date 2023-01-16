@@ -813,6 +813,9 @@ static int init_hash_tables(struct dm_snapshot *s)
 
 	if (hash_size < 64)
 		hash_size = 64;
+	if (!strcmp(s->ti->type->name, "snapshot_read"))
+		hash_size = max_buckets;
+
 	hash_size = rounddown_pow_of_two(hash_size);
 	if (dm_exception_table_init(&s->complete, hash_size,
 				    DM_CHUNK_CONSECUTIVE_BITS))
@@ -1779,6 +1782,77 @@ out:
 	return r;
 }
 
+static int snapshot_read_map(struct dm_target *ti, struct bio *bio)
+{
+	struct dm_exception *e = NULL;
+	struct dm_snapshot *s = ti->private;
+	int r = DM_MAPIO_REMAPPED;
+	chunk_t chunk;
+	sector_t  sector = bio->bi_iter.bi_sector;
+
+	chunk = sector_to_chunk(s->store, sector);
+
+	/* Full snapshots are not usable */
+	/* To get here the table must be live so s->active is always set. */
+	if (!s->valid)
+		return -EIO;
+
+	/* If the block is already remapped - use that, else remap it */
+	e = dm_lookup_exception(&s->complete, chunk);
+	if (e) {
+		remap_exception(s, e, bio, chunk);
+		goto out;
+	}
+	bio->bi_bdev = s->origin->bdev;
+out:
+	return r;
+}
+
+/* return value : 0 means success, 1 means error*/
+int snapshot_read_sector_fix(struct dm_target *ti,
+			     struct bio *bio,
+			     sector_t sector,
+			     unsigned int sector_num,
+			     unsigned int *count)
+{
+	struct dm_exception *e = NULL;
+	struct dm_snapshot *s = NULL;
+	int ret = 0;
+	chunk_t chunk;
+	unsigned int cnt = 0;
+	unsigned int max_io;
+	sector_t max_sector;
+
+	if (!ti || !bio || !count)
+		return 1;
+
+	max_io = ti->max_io_len;
+	max_sector = sector + sector_num + max_io;
+	s = ti->private;
+	if (!s->valid)
+		return 1;
+
+	do {
+		chunk = sector_to_chunk(s->store, sector);
+
+		e = dm_lookup_exception(&s->complete, chunk);
+		if (e) {
+			ret = 1;
+			break;
+		}
+		cnt += max_io;
+		sector += max_io;
+	} while (sector <  max_sector);
+	if (!ret) {
+		*count = sector_num;
+	} else if (ret && (cnt > max_io)) {
+		*count = cnt - max_io;
+		ret = 0;
+	}
+
+	return ret;
+}
+
 /*
  * A snapshot-merge target behaves like a combination of a snapshot
  * target and a snapshot-origin target.  It only generates new
@@ -1858,6 +1932,12 @@ static int snapshot_end_io(struct dm_target *ti, struct bio *bio, int error)
 	if (is_bio_tracked(bio))
 		stop_tracking_chunk(s, bio);
 
+	return 0;
+}
+
+static int snapshot_read_end_io(struct dm_target *ti,
+				struct bio *bio, int error)
+{
 	return 0;
 }
 
@@ -2400,6 +2480,20 @@ static struct target_type merge_target = {
 	.iterate_devices = snapshot_iterate_devices,
 };
 
+static struct target_type read_target = {
+	.name    = "snapshot_read",
+	.version = {1, 1, 0},
+	.module  = THIS_MODULE,
+	.ctr     = snapshot_ctr,
+	.dtr     = snapshot_dtr,
+	.map     = snapshot_read_map,
+	.end_io  = snapshot_read_end_io,
+	.preresume  = snapshot_preresume,
+	.resume  = snapshot_resume,
+	.status  = snapshot_status,
+	.iterate_devices = snapshot_iterate_devices,
+};
+
 static int __init dm_snapshot_init(void)
 {
 	int r;
@@ -2426,6 +2520,12 @@ static int __init dm_snapshot_init(void)
 	if (r < 0) {
 		DMERR("Merge target register failed %d", r);
 		goto bad_register_merge_target;
+	}
+
+	r = dm_register_target(&read_target);
+	if (r < 0) {
+		DMERR("read target register failed %d", r);
+		goto bad_register_read_target;
 	}
 
 	r = init_origin_hash();
@@ -2456,6 +2556,8 @@ bad_exception_cache:
 	exit_origin_hash();
 bad_origin_hash:
 	dm_unregister_target(&merge_target);
+bad_register_read_target:
+	dm_unregister_target(&read_target);
 bad_register_merge_target:
 	dm_unregister_target(&origin_target);
 bad_register_origin_target:
@@ -2471,6 +2573,7 @@ static void __exit dm_snapshot_exit(void)
 	dm_unregister_target(&snapshot_target);
 	dm_unregister_target(&origin_target);
 	dm_unregister_target(&merge_target);
+	dm_unregister_target(&read_target);
 
 	exit_origin_hash();
 	kmem_cache_destroy(pending_cache);

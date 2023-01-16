@@ -442,9 +442,6 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	int count = 1;
 	int rc = NET_XMIT_SUCCESS;
 
-	/* Do not fool qdisc_drop_all() */
-	skb->prev = NULL;
-
 	/* Random duplication */
 	if (q->duplicate && q->duplicate >= get_crandom(&q->dup_cor))
 		++count;
@@ -465,7 +462,7 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	/* If a delay is expected, orphan the skb. (orphaning usually takes
 	 * place at TX completion time, so _before_ the link transit delay)
 	 */
-	if (q->latency || q->jitter || q->rate)
+	if (q->latency || q->jitter)
 		skb_orphan_partial(skb);
 
 	/*
@@ -533,31 +530,21 @@ static int netem_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		now = psched_get_time();
 
 		if (q->rate) {
-			struct netem_skb_cb *last = NULL;
+			struct sk_buff *last;
 
-			if (sch->q.tail)
-				last = netem_skb_cb(sch->q.tail);
-			if (q->t_root.rb_node) {
-				struct sk_buff *t_skb;
-				struct netem_skb_cb *t_last;
-
-				t_skb = netem_rb_to_skb(rb_last(&q->t_root));
-				t_last = netem_skb_cb(t_skb);
-				if (!last ||
-				    t_last->time_to_send > last->time_to_send) {
-					last = t_last;
-				}
-			}
-
+			if (sch->q.qlen)
+				last = sch->q.tail;
+			else
+				last = netem_rb_to_skb(rb_last(&q->t_root));
 			if (last) {
 				/*
 				 * Last packet in queue is reference point (now),
 				 * calculate this time bonus and subtract
 				 * from delay.
 				 */
-				delay -= last->time_to_send - now;
+				delay -= netem_skb_cb(last)->time_to_send - now;
 				delay = max_t(psched_tdiff_t, 0, delay);
-				now = last->time_to_send;
+				now = netem_skb_cb(last)->time_to_send;
 			}
 
 			delay += packet_len_2_sched_time(qdisc_pkt_len(skb), q);
@@ -940,10 +927,10 @@ static int netem_init(struct Qdisc *sch, struct nlattr *opt)
 	struct netem_sched_data *q = qdisc_priv(sch);
 	int ret;
 
-	qdisc_watchdog_init(&q->watchdog, sch);
-
 	if (!opt)
 		return -EINVAL;
+
+	qdisc_watchdog_init(&q->watchdog, sch);
 
 	q->loss_model = CLG_RANDOM;
 	ret = netem_change(sch, opt);

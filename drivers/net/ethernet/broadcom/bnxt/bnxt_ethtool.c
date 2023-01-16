@@ -793,7 +793,6 @@ static int bnxt_get_link_ksettings(struct net_device *dev,
 	u32 ethtool_speed;
 
 	ethtool_link_ksettings_zero_link_mode(lk_ksettings, supported);
-	mutex_lock(&bp->link_lock);
 	bnxt_fw_to_ethtool_support_spds(link_info, lk_ksettings);
 
 	ethtool_link_ksettings_zero_link_mode(lk_ksettings, advertising);
@@ -841,7 +840,6 @@ static int bnxt_get_link_ksettings(struct net_device *dev,
 			base->port = PORT_FIBRE;
 	}
 	base->phy_address = link_info->phy_addr;
-	mutex_unlock(&bp->link_lock);
 
 	return 0;
 }
@@ -928,7 +926,6 @@ static int bnxt_set_link_ksettings(struct net_device *dev,
 	if (!BNXT_SINGLE_PF(bp))
 		return -EOPNOTSUPP;
 
-	mutex_lock(&bp->link_lock);
 	if (base->autoneg == AUTONEG_ENABLE) {
 		BNXT_ETHTOOL_TO_FW_SPDS(fw_advertising, lk_ksettings,
 					advertising);
@@ -973,7 +970,6 @@ static int bnxt_set_link_ksettings(struct net_device *dev,
 		rc = bnxt_hwrm_set_link_setting(bp, set_pause, false);
 
 set_setting_exit:
-	mutex_unlock(&bp->link_lock);
 	return rc;
 }
 
@@ -1847,8 +1843,8 @@ static int bnxt_get_module_eeprom(struct net_device *dev,
 	/* Read A2 portion of the EEPROM */
 	if (length) {
 		start -= ETH_MODULE_SFF_8436_LEN;
-		rc = bnxt_read_sfp_module_eeprom_info(bp, I2C_DEV_ADDR_A2, 1,
-						      start, length, data);
+		bnxt_read_sfp_module_eeprom_info(bp, I2C_DEV_ADDR_A2, 1, start,
+						 length, data);
 	}
 	return rc;
 }

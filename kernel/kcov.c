@@ -240,8 +240,7 @@ static void kcov_put(struct kcov *kcov)
 
 void kcov_task_init(struct task_struct *t)
 {
-	WRITE_ONCE(t->kcov_mode, KCOV_MODE_DISABLED);
-	barrier();
+	t->kcov_mode = KCOV_MODE_DISABLED;
 	t->kcov_size = 0;
 	t->kcov_area = NULL;
 	t->kcov = NULL;

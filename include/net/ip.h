@@ -274,6 +274,9 @@ static inline int inet_is_local_reserved_port(struct net *net, int port)
 
 __be32 inet_current_timestamp(void);
 
+extern int sysctl_local_reserved_ports_bind_ctrl;
+extern int sysctl_local_reserved_ports_bind_pid;
+
 /* From inetpeer.c */
 extern int inet_peer_threshold;
 extern int inet_peer_minttl;
@@ -549,6 +552,7 @@ static inline struct sk_buff *ip_check_defrag(struct net *net, struct sk_buff *s
 	return skb;
 }
 #endif
+int ip_frag_mem(struct net *net);
 
 /*
  *	Functions provided by ip_forward.c

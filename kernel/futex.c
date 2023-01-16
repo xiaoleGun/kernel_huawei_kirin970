@@ -210,7 +210,7 @@ struct futex_pi_state {
 	atomic_t refcount;
 
 	union futex_key key;
-};
+} __randomize_layout;
 
 /**
  * struct futex_q - The hashed futex queue entry, one per waiting task
@@ -244,7 +244,7 @@ struct futex_q {
 	struct rt_mutex_waiter *rt_waiter;
 	union futex_key *requeue_pi_key;
 	u32 bitset;
-};
+} __randomize_layout;
 
 static const struct futex_q futex_q_init = {
 	/* list gets initialized in queue_me()*/
@@ -1462,8 +1462,8 @@ static int futex_atomic_op_inuser(unsigned int encoded_op, u32 __user *uaddr)
 {
 	unsigned int op =	  (encoded_op & 0x70000000) >> 28;
 	unsigned int cmp =	  (encoded_op & 0x0f000000) >> 24;
-	int oparg = sign_extend32((encoded_op & 0x00fff000) >> 12, 11);
-	int cmparg = sign_extend32(encoded_op & 0x00000fff, 11);
+	int oparg = sign_extend32((encoded_op & 0x00fff000) >> 12, 12);
+	int cmparg = sign_extend32(encoded_op & 0x00000fff, 12);
 	int oldval, ret;
 
 	if (encoded_op & (FUTEX_OP_OPARG_SHIFT << 28)) {

@@ -135,24 +135,17 @@
 
 #else
 
-/*
- * In the 32-bit version of this macro, we store bp in a memory location
- * because we've ran out of registers.
- * Now we can't reference that memory location while we've modified
- * %esp or %ebp, so we first push it on the stack, just before we push
- * %ebp, and then when we need it we read it from the stack where we
- * just pushed it.
+/* In the 32-bit version of this macro, we use "m" because there is no
+ * more register left for bp
  */
 #define VMW_PORT_HB_OUT(cmd, in_ecx, in_si, in_di,	\
 			port_num, magic, bp,		\
 			eax, ebx, ecx, edx, si, di)	\
 ({							\
-	asm volatile ("push %12;"			\
-		"push %%ebp;"				\
-		"mov 0x04(%%esp), %%ebp;"		\
+	asm volatile ("push %%ebp;"			\
+		"mov %12, %%ebp;"			\
 		"rep outsb;"				\
-		"pop %%ebp;"				\
-		"add $0x04, %%esp;" :			\
+		"pop %%ebp;" :				\
 		"=a"(eax),				\
 		"=b"(ebx),				\
 		"=c"(ecx),				\
@@ -174,12 +167,10 @@
 		       port_num, magic, bp,		\
 		       eax, ebx, ecx, edx, si, di)	\
 ({							\
-	asm volatile ("push %12;"			\
-		"push %%ebp;"				\
-		"mov 0x04(%%esp), %%ebp;"		\
+	asm volatile ("push %%ebp;"			\
+		"mov %12, %%ebp;"			\
 		"rep insb;"				\
-		"pop %%ebp;"				\
-		"add $0x04, %%esp;" :			\
+		"pop %%ebp" :				\
 		"=a"(eax),				\
 		"=b"(ebx),				\
 		"=c"(ecx),				\

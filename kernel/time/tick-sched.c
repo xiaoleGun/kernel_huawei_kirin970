@@ -19,6 +19,7 @@
 #include <linux/percpu.h>
 #include <linux/profile.h>
 #include <linux/sched.h>
+#include <linux/timer.h>
 #include <linux/module.h>
 #include <linux/irq_work.h>
 #include <linux/posix-timers.h>
@@ -928,6 +929,11 @@ static void __tick_nohz_idle_enter(struct tick_sched *ts)
 
 	now = tick_nohz_start_idle(ts);
 
+#ifdef CONFIG_SMP
+	if (check_pending_deferrable_timers(cpu))
+		raise_softirq_irqoff(TIMER_SOFTIRQ);
+#endif
+
 	if (can_stop_idle_tick(cpu, ts)) {
 		int was_stopped = ts->tick_stopped;
 
@@ -991,10 +997,14 @@ void tick_nohz_irq_exit(void)
 {
 	struct tick_sched *ts = this_cpu_ptr(&tick_cpu_sched);
 
-	if (ts->inidle)
+	if (ts->inidle) {
+		/* Cancel the timer because CPU already waken up from the C-states*/
+		menu_hrtimer_cancel();
 		__tick_nohz_idle_enter(ts);
-	else
+	}
+	else {
 		tick_nohz_full_update_tick(ts);
+	}
 }
 
 /**
@@ -1059,6 +1069,8 @@ void tick_nohz_idle_exit(void)
 	WARN_ON_ONCE(!ts->inidle);
 
 	ts->inidle = 0;
+	/* Cancel the timer because CPU already waken up from the C-states*/
+	menu_hrtimer_cancel();
 
 	if (ts->idle_active || ts->tick_stopped)
 		now = ktime_get();

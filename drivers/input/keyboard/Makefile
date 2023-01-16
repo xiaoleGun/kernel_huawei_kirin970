@@ -64,3 +64,5 @@ obj-$(CONFIG_KEYBOARD_TEGRA)		+= tegra-kbc.o
 obj-$(CONFIG_KEYBOARD_TWL4030)		+= twl4030_keypad.o
 obj-$(CONFIG_KEYBOARD_XTKBD)		+= xtkbd.o
 obj-$(CONFIG_KEYBOARD_W90P910)		+= w90p910_keypad.o
+obj-$(CONFIG_KEYBOARD_HISI_GPIO_KEY)	+= hisi_gpio_key.o
+obj-$(CONFIG_KEYBOARD_HISI_PMIC_GPIO_KEY)	+= hisi_pmic_gpio_key.o

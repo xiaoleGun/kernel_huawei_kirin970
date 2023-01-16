@@ -217,11 +217,15 @@ static unsigned long ksm_pages_unshared;
 /* The number of rmap_items in use: to calculate pages_volatile */
 static unsigned long ksm_rmap_items;
 
+/* set pages to 10 for powersaving purpose*/
 /* Number of pages ksmd should scan in one batch */
-static unsigned int ksm_thread_pages_to_scan = 100;
+static unsigned int ksm_thread_pages_to_scan = 10;
 
 /* Milliseconds ksmd should sleep between batches */
 static unsigned int ksm_thread_sleep_millisecs = 20;
+
+/* Boolean to indicate whether to use deferred timer or not */
+static bool use_deferred_timer = 1;
 
 #ifdef CONFIG_NUMA
 /* Zeroed when merging across nodes is not allowed */
@@ -236,7 +240,7 @@ static int ksm_nr_node_ids = 1;
 #define KSM_RUN_MERGE	1
 #define KSM_RUN_UNMERGE	2
 #define KSM_RUN_OFFLINE	4
-static unsigned long ksm_run = KSM_RUN_STOP;
+static unsigned long ksm_run = KSM_RUN_MERGE;	/*boot with start*/
 static void wait_while_offlining(void);
 
 static DECLARE_WAIT_QUEUE_HEAD(ksm_thread_wait);
@@ -1469,22 +1473,8 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 	tree_rmap_item =
 		unstable_tree_search_insert(rmap_item, page, &tree_page);
 	if (tree_rmap_item) {
-		bool split;
-
 		kpage = try_to_merge_two_pages(rmap_item, page,
 						tree_rmap_item, tree_page);
-		/*
-		 * If both pages we tried to merge belong to the same compound
-		 * page, then we actually ended up increasing the reference
-		 * count of the same compound page twice, and split_huge_page
-		 * failed.
-		 * Here we set a flag if that happened, and we use it later to
-		 * try split_huge_page again. Since we call put_page right
-		 * afterwards, the reference count will be correct and
-		 * split_huge_page should succeed.
-		 */
-		split = PageTransCompound(page)
-			&& compound_head(page) == compound_head(tree_page);
 		put_page(tree_page);
 		if (kpage) {
 			/*
@@ -1509,20 +1499,6 @@ static void cmp_and_merge_page(struct page *page, struct rmap_item *rmap_item)
 				break_cow(tree_rmap_item);
 				break_cow(rmap_item);
 			}
-		} else if (split) {
-			/*
-			 * We are here if we tried to merge two pages and
-			 * failed because they both belonged to the same
-			 * compound page. We will split the page now, but no
-			 * merging will take place.
-			 * We do not want to add the cost of a full lock; if
-			 * the page is locked, it is better to skip it and
-			 * perhaps try again later.
-			 */
-			if (!trylock_page(page))
-				return;
-			split_huge_page(page);
-			unlock_page(page);
 		}
 	}
 }
@@ -1710,6 +1686,7 @@ next_mm:
 		goto next_mm;
 
 	ksm_scan.seqnr++;
+	ksm_show_stats();
 	return NULL;
 }
 
@@ -1732,6 +1709,41 @@ static void ksm_do_scan(unsigned int scan_npages)
 	}
 }
 
+static void process_timeout(unsigned long __data)
+{
+	wake_up_process((struct task_struct *)__data);
+}
+
+static signed long __sched deferred_schedule_timeout(signed long timeout)
+{
+	struct timer_list timer;
+	unsigned long expire;
+
+	__set_current_state(TASK_INTERRUPTIBLE);
+	if (timeout < 0) {
+		pr_err("schedule_timeout: wrong timeout value %lx\n",
+				timeout);
+		__set_current_state(TASK_RUNNING);
+		goto out;
+	}
+
+	expire = timeout + jiffies;
+
+	setup_deferrable_timer_on_stack(&timer, process_timeout,
+		(unsigned long)current);
+	mod_timer(&timer, expire);
+	schedule();
+	del_singleshot_timer_sync(&timer);
+
+	/* Remove the timer from the object tracker */
+	destroy_timer_on_stack(&timer);
+
+	timeout = expire - jiffies;
+
+out:
+	return timeout < 0 ? 0 : timeout;
+}
+
 static int ksmd_should_run(void)
 {
 	return (ksm_run & KSM_RUN_MERGE) && !list_empty(&ksm_mm_head.mm_list);
@@ -1752,8 +1764,12 @@ static int ksm_scan_thread(void *nothing)
 		try_to_freeze();
 
 		if (ksmd_should_run()) {
-			schedule_timeout_interruptible(
-				msecs_to_jiffies(ksm_thread_sleep_millisecs));
+			if (use_deferred_timer)
+				deferred_schedule_timeout(
+					msecs_to_jiffies(ksm_thread_sleep_millisecs));
+			else
+				schedule_timeout_interruptible(
+					msecs_to_jiffies(ksm_thread_sleep_millisecs));
 		} else {
 			wait_event_freezable(ksm_thread_wait,
 				ksmd_should_run() || kthread_should_stop());
@@ -1886,6 +1902,18 @@ void __ksm_exit(struct mm_struct *mm)
 	}
 }
 
+void ksm_show_stats(void)
+{
+	pr_info("ksm: %lu %lu %lu %lu %lu %lu\n",
+		ksm_scan.seqnr,
+		ksm_rmap_items,
+		ksm_pages_shared,
+		ksm_pages_sharing,
+		ksm_pages_unshared,
+		ksm_rmap_items - ksm_pages_shared - ksm_pages_sharing
+			- ksm_pages_unshared);
+}
+
 struct page *ksm_might_need_to_copy(struct page *page,
 			struct vm_area_struct *vma, unsigned long address)
 {
@@ -1935,6 +1963,7 @@ int rmap_walk_ksm(struct page *page, struct rmap_walk_control *rwc)
 	stable_node = page_stable_node(page);
 	if (!stable_node)
 		return ret;
+
 again:
 	hlist_for_each_entry(rmap_item, &stable_node->hlist, hlist) {
 		struct anon_vma *anon_vma = rmap_item->anon_vma;
@@ -2202,6 +2231,26 @@ static ssize_t run_store(struct kobject *kobj, struct kobj_attribute *attr,
 }
 KSM_ATTR(run);
 
+static ssize_t deferred_timer_show(struct kobject *kobj,
+			struct kobj_attribute *attr, char *buf)
+{
+	return snprintf(buf, 8, "%d\n", use_deferred_timer);
+}
+
+static ssize_t deferred_timer_store(struct kobject *kobj,
+		struct kobj_attribute *attr,
+		const char *buf, size_t count)
+{
+	unsigned long enable;
+	int err;
+
+	err = kstrtoul(buf, 10, &enable);
+	use_deferred_timer = enable;
+
+	return count;
+}
+KSM_ATTR(deferred_timer);
+
 #ifdef CONFIG_NUMA
 static ssize_t merge_across_nodes_show(struct kobject *kobj,
 				struct kobj_attribute *attr, char *buf)
@@ -2314,6 +2363,7 @@ static struct attribute *ksm_attrs[] = {
 	&pages_unshared_attr.attr,
 	&pages_volatile_attr.attr,
 	&full_scans_attr.attr,
+	&deferred_timer_attr.attr,
 #ifdef CONFIG_NUMA
 	&merge_across_nodes_attr.attr,
 #endif

@@ -309,8 +309,19 @@ extern void swap_setup(void);
 
 extern void add_page_to_unevictable_list(struct page *page);
 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+extern void __lru_cache_add_active_or_unevictable(struct page *page,
+						unsigned long vma_flags);
+
+static inline void lru_cache_add_active_or_unevictable(struct page *page,
+						struct vm_area_struct *vma)
+{
+	return __lru_cache_add_active_or_unevictable(page, vma->vm_flags);
+}
+#else
 extern void lru_cache_add_active_or_unevictable(struct page *page,
 						struct vm_area_struct *vma);
+#endif
 
 /* linux/mm/vmscan.c */
 extern unsigned long zone_reclaimable_pages(struct zone *zone);
@@ -330,6 +341,17 @@ extern unsigned long shrink_all_memory(unsigned long nr_pages);
 extern int vm_swappiness;
 extern int remove_mapping(struct address_space *mapping, struct page *page);
 extern unsigned long vm_total_pages;
+#ifdef CONFIG_HUAWEI_RCC
+#define RCC_MODE_ANON   1
+#define RCC_MODE_FILE   2
+int try_to_free_pages_ex(int nr_pages, int mode);
+#endif
+
+#ifdef CONFIG_SHRINK_MEMORY
+extern int sysctl_shrink_memory;
+extern int sysctl_shrinkmem_handler(struct ctl_table *table, int write,
+					void __user *buffer, size_t *length , loff_t *ppos);
+#endif
 
 #ifdef CONFIG_NUMA
 extern int node_reclaim_mode;

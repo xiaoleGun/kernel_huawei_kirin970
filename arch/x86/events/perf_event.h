@@ -548,7 +548,7 @@ struct x86_pmu {
 	struct x86_pmu_quirk *quirks;
 	int		perfctr_second_write;
 	bool		late_ack;
-	u64		(*limit_period)(struct perf_event *event, u64 l);
+	unsigned	(*limit_period)(struct perf_event *event, unsigned l);
 
 	/*
 	 * sysfs attrs
@@ -633,7 +633,6 @@ struct x86_perf_task_context {
 	u64 lbr_to[MAX_LBR_ENTRIES];
 	u64 lbr_info[MAX_LBR_ENTRIES];
 	int tos;
-	int valid_lbrs;
 	int lbr_callstack_users;
 	int lbr_stack_state;
 };
@@ -835,16 +834,11 @@ static inline int amd_pmu_init(void)
 
 static inline bool intel_pmu_has_bts(struct perf_event *event)
 {
-	struct hw_perf_event *hwc = &event->hw;
-	unsigned int hw_event, bts_event;
+	if (event->attr.config == PERF_COUNT_HW_BRANCH_INSTRUCTIONS &&
+	    !event->attr.freq && event->hw.sample_period == 1)
+		return true;
 
-	if (event->attr.freq)
-		return false;
-
-	hw_event = hwc->config & INTEL_ARCH_EVENT_MASK;
-	bts_event = x86_pmu.event_map(PERF_COUNT_HW_BRANCH_INSTRUCTIONS);
-
-	return hw_event == bts_event && hwc->sample_period == 1;
+	return false;
 }
 
 int intel_pmu_save_and_restart(struct perf_event *event);

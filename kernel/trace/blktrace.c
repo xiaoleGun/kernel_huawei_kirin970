@@ -1720,10 +1720,6 @@ static ssize_t sysfs_blk_trace_attr_store(struct device *dev,
 	mutex_lock(&bdev->bd_mutex);
 
 	if (attr == &dev_attr_enable) {
-		if (!!value == !!q->blk_trace) {
-			ret = 0;
-			goto out_unlock_bdev;
-		}
 		if (value)
 			ret = blk_trace_setup_queue(q, bdev);
 		else
@@ -1830,6 +1826,12 @@ void blk_fill_rwbs(char *rwbs, int op, u32 rw, int bytes)
 		rwbs[i++] = 'S';
 	if (rw & REQ_META)
 		rwbs[i++] = 'M';
+	if (rw & REQ_FG)
+		rwbs[i++] = 'H';
+#ifdef CONFIG_ROW_VIP_QUEUE
+	if (rw & REQ_VIP)
+		rwbs[i++] = 'V';
+#endif
 
 	rwbs[i] = '\0';
 }

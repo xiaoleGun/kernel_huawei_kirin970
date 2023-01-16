@@ -471,6 +471,8 @@ static enum resp_states check_rkey(struct rxe_qp *qp,
 				state = RESPST_ERR_LENGTH;
 				goto err;
 			}
+
+			qp->resp.resid = mtu;
 		} else {
 			if (pktlen != resid) {
 				state = RESPST_ERR_LENGTH;
@@ -978,9 +980,7 @@ static int send_atomic_ack(struct rxe_qp *qp, struct rxe_pkt_info *pkt,
 	free_rd_atomic_resource(qp, res);
 	rxe_advance_resp_resource(qp);
 
-	memcpy(SKB_TO_PKT(skb), &ack_pkt, sizeof(ack_pkt));
-	memset((unsigned char *)SKB_TO_PKT(skb) + sizeof(ack_pkt), 0,
-	       sizeof(skb->cb) - sizeof(ack_pkt));
+	memcpy(SKB_TO_PKT(skb), &ack_pkt, sizeof(skb->cb));
 
 	res->type = RXE_ATOMIC_MASK;
 	res->atomic.skb = skb;

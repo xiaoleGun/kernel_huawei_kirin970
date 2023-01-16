@@ -2486,8 +2486,10 @@ read_block_for_search(struct btrfs_trans_handle *trans,
 	if (p->reada != READA_NONE)
 		reada_for_search(root, p, level, slot, key->objectid);
 
+	btrfs_release_path(p);
+
 	ret = -EAGAIN;
-	tmp = read_tree_block(root, blocknr, gen);
+	tmp = read_tree_block(root, blocknr, 0);
 	if (!IS_ERR(tmp)) {
 		/*
 		 * If the read above didn't mark this buffer up to date,
@@ -2501,8 +2503,6 @@ read_block_for_search(struct btrfs_trans_handle *trans,
 	} else {
 		ret = PTR_ERR(tmp);
 	}
-
-	btrfs_release_path(p);
 	return ret;
 }
 
@@ -2760,8 +2760,6 @@ again:
 		 * contention with the cow code
 		 */
 		if (cow) {
-			bool last_level = (level == (BTRFS_MAX_LEVEL - 1));
-
 			/*
 			 * if we don't really need to cow this block
 			 * then we don't want to set the path blocking,
@@ -2786,13 +2784,9 @@ again:
 			}
 
 			btrfs_set_path_blocking(p);
-			if (last_level)
-				err = btrfs_cow_block(trans, root, b, NULL, 0,
-						      &b);
-			else
-				err = btrfs_cow_block(trans, root, b,
-						      p->nodes[level + 1],
-						      p->slots[level + 1], &b);
+			err = btrfs_cow_block(trans, root, b,
+					      p->nodes[level + 1],
+					      p->slots[level + 1], &b);
 			if (err) {
 				ret = err;
 				goto done;

@@ -564,6 +564,9 @@ struct spi_master {
 	void			*dummy_tx;
 
 	int (*fw_translate_cs)(struct spi_master *master, unsigned cs);
+#if defined CONFIG_HISI_SPI
+	struct mutex		msg_mutex;
+#endif
 };
 
 static inline void *spi_master_get_devdata(struct spi_master *master)
@@ -1313,5 +1316,10 @@ spi_transfer_is_last(struct spi_master *master, struct spi_transfer *xfer)
 {
 	return list_is_last(&xfer->transfer_list, &master->cur_msg->transfers);
 }
+#if defined CONFIG_HISI_SPI
+void disable_spi(struct spi_master *master);
+int pl022_runtime_suspend(struct device *dev);
+int pl022_runtime_resume(struct device *dev);
+#endif
 
 #endif /* __LINUX_SPI_H */

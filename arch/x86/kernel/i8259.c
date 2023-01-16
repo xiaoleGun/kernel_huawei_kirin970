@@ -4,7 +4,6 @@
 #include <linux/sched.h>
 #include <linux/ioport.h>
 #include <linux/interrupt.h>
-#include <linux/irq.h>
 #include <linux/timex.h>
 #include <linux/random.h>
 #include <linux/init.h>
@@ -419,7 +418,6 @@ struct legacy_pic default_legacy_pic = {
 };
 
 struct legacy_pic *legacy_pic = &default_legacy_pic;
-EXPORT_SYMBOL(legacy_pic);
 
 static int __init i8259A_init_ops(void)
 {

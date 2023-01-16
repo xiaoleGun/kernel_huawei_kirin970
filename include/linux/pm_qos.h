@@ -16,7 +16,19 @@ enum {
 	PM_QOS_NETWORK_LATENCY,
 	PM_QOS_NETWORK_THROUGHPUT,
 	PM_QOS_MEMORY_BANDWIDTH,
+#ifdef CONFIG_DEVFREQ_GOV_PM_QOS
+	PM_QOS_MEMORY_LATENCY,
+	PM_QOS_MEMORY_THROUGHPUT,
+	PM_QOS_MEMORY_THROUGHPUT_UP_THRESHOLD,
+#endif
 
+#ifdef CONFIG_HISI_CPUDDR_FREQ_LINK
+	PM_QOS_ACPUDDR_LINK_GOVERNOR_LEVEL,
+#endif
+
+#ifdef CONFIG_HISI_NPUFREQ_PM_QOS
+	PM_QOS_HISI_NPU_FREQ_DNLIMIT,
+#endif
 	/* insert new class ID */
 	PM_QOS_NUM_CLASSES,
 };
@@ -34,6 +46,18 @@ enum pm_qos_flags_status {
 #define PM_QOS_NETWORK_LAT_DEFAULT_VALUE	(2000 * USEC_PER_SEC)
 #define PM_QOS_NETWORK_THROUGHPUT_DEFAULT_VALUE	0
 #define PM_QOS_MEMORY_BANDWIDTH_DEFAULT_VALUE	0
+
+#ifdef CONFIG_DEVFREQ_GOV_PM_QOS
+#define PM_QOS_MEMORY_LATENCY_DEFAULT_VALUE	0
+#define PM_QOS_MEMORY_THROUGHPUT_DEFAULT_VALUE	0
+#define PM_QOS_MEMORY_THROUGHPUT_UP_THRESHOLD_DEFAULT_VALUE	30000
+#endif
+#ifdef CONFIG_HISI_CPUDDR_FREQ_LINK
+#define PM_QOS_ACPUDDR_LINK_GOVERNOR_LEVEL_DEFAULT_VALUE 2
+#endif
+#ifdef CONFIG_HISI_NPUFREQ_PM_QOS
+#define PM_QOS_HISI_NPU_FREQ_DNLIMIT_DEFAULT_VALUE	0
+#endif
 #define PM_QOS_RESUME_LATENCY_DEFAULT_VALUE	0
 #define PM_QOS_LATENCY_TOLERANCE_DEFAULT_VALUE	0
 #define PM_QOS_LATENCY_TOLERANCE_NO_CONSTRAINT	(-1)
@@ -110,6 +134,15 @@ enum pm_qos_req_action {
 	PM_QOS_REMOVE_REQ	/* Remove an existing request */
 };
 
+#ifdef CONFIG_HISI_CPUDDR_FREQ_LINK
+/* Action requested to ddr cpu freq link level*/
+enum {
+	LINK_LEVEL_0 = 0,
+	LINK_LEVEL_1,
+	LINK_LEVEL_2,
+	LINK_LEVEL_MAX,
+};
+#endif
 static inline int dev_pm_qos_request_active(struct dev_pm_qos_request *req)
 {
 	return req->dev != NULL;
@@ -172,6 +205,11 @@ static inline s32 dev_pm_qos_requested_resume_latency(struct device *dev)
 static inline s32 dev_pm_qos_requested_flags(struct device *dev)
 {
 	return dev->power.qos->flags_req->data.flr.flags;
+}
+static inline s32 dev_pm_qos_raw_read_value(struct device *dev)
+{
+	return IS_ERR_OR_NULL(dev->power.qos) ?
+		0 : pm_qos_read_value(&dev->power.qos->resume_latency);
 }
 #else
 static inline enum pm_qos_flags_status __dev_pm_qos_flags(struct device *dev,
@@ -237,6 +275,7 @@ static inline void dev_pm_qos_hide_latency_tolerance(struct device *dev) {}
 
 static inline s32 dev_pm_qos_requested_resume_latency(struct device *dev) { return 0; }
 static inline s32 dev_pm_qos_requested_flags(struct device *dev) { return 0; }
+static inline s32 dev_pm_qos_raw_read_value(struct device *dev) { return 0; }
 #endif
 
 #endif

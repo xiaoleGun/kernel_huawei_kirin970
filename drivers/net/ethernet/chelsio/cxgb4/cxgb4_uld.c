@@ -342,7 +342,6 @@ static void free_queues_uld(struct adapter *adap, unsigned int uld_type)
 {
 	struct sge_uld_rxq_info *rxq_info = adap->sge.uld_rxq_info[uld_type];
 
-	adap->sge.uld_rxq_info[uld_type] = NULL;
 	kfree(rxq_info->rspq_id);
 	kfree(rxq_info->uldrxq);
 	kfree(rxq_info);

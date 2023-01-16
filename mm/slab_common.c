@@ -19,7 +19,7 @@
 #include <asm/tlbflush.h>
 #include <asm/page.h>
 #include <linux/memcontrol.h>
-
+#include <linux/hisi/rdr_hisi_ap_hook.h>
 #define CREATE_TRACE_POINTS
 #include <trace/events/kmem.h>
 
@@ -885,18 +885,18 @@ struct kmem_cache *kmalloc_slab(size_t size, gfp_t flags)
 {
 	int index;
 
+	if (unlikely(size > KMALLOC_MAX_SIZE)) {
+		WARN_ON_ONCE(!(flags & __GFP_NOWARN));
+		return NULL;
+	}
+
 	if (size <= 192) {
 		if (!size)
 			return ZERO_SIZE_PTR;
 
 		index = size_index[size_index_elem(size)];
-	} else {
-		if (unlikely(size > KMALLOC_MAX_CACHE_SIZE)) {
-			WARN_ON(1);
-			return NULL;
-		}
+	} else
 		index = fls(size - 1);
-	}
 
 #ifdef CONFIG_ZONE_DMA
 	if (unlikely((flags & GFP_DMA)))
@@ -1053,6 +1053,8 @@ void *kmalloc_order_trace(size_t size, gfp_t flags, unsigned int order)
 {
 	void *ret = kmalloc_order(size, flags, order);
 	trace_kmalloc(_RET_IP_, ret, size, PAGE_SIZE << order, flags);
+	kmalloc_trace_hook((unsigned char)MEM_ALLOC, _RET_IP_, (unsigned long long)ret,/*lint !e571*/
+                (unsigned long long)virt_to_phys(ret), (unsigned int)size);
 	return ret;
 }
 EXPORT_SYMBOL(kmalloc_order_trace);

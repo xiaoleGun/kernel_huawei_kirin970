@@ -138,8 +138,25 @@
 
 #include <trace/events/sock.h>
 
+#ifdef CONFIG_MPTCP
+#include <net/mptcp.h>
+#include <net/inet_common.h>
+#endif
 #include <net/tcp.h>
+
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+#include <linux/android_aid.h>
+#endif
+
 #include <net/busy_poll.h>
+
+#ifdef CONFIG_HUAWEI_XENGINE
+#include <huawei_platform/emcom/emcom_xengine.h>
+#endif
+
+#ifdef CONFIG_HW_QTAGUID_PID
+#include <huawei_platform/net/qtaguid_pid/qtaguid_pid.h>
+#endif
 
 static DEFINE_MUTEX(proto_list_mutex);
 static LIST_HEAD(proto_list);
@@ -238,7 +255,11 @@ static const char *const af_family_slock_key_strings[AF_MAX+1] = {
   "slock-AF_NFC"   , "slock-AF_VSOCK"    ,"slock-AF_KCM"       ,
   "slock-AF_QIPCRTR", "slock-AF_MAX"
 };
-static const char *const af_family_clock_key_strings[AF_MAX+1] = {
+
+#ifndef CONFIG_MPTCP
+static const
+#endif
+char *const af_family_clock_key_strings[AF_MAX + 1] = {
   "clock-AF_UNSPEC", "clock-AF_UNIX"     , "clock-AF_INET"     ,
   "clock-AF_AX25"  , "clock-AF_IPX"      , "clock-AF_APPLETALK",
   "clock-AF_NETROM", "clock-AF_BRIDGE"   , "clock-AF_ATMPVC"   ,
@@ -260,7 +281,10 @@ static const char *const af_family_clock_key_strings[AF_MAX+1] = {
  * sk_callback_lock locking rules are per-address-family,
  * so split the lock classes by using a per-AF key:
  */
-static struct lock_class_key af_callback_keys[AF_MAX];
+#ifndef CONFIG_MPTCP
+static
+#endif
+struct lock_class_key af_callback_keys[AF_MAX];
 
 /* Take into consideration the size of the struct sk_buff overhead in the
  * determination of these values, since that is non-constant across
@@ -533,7 +557,11 @@ static int sock_setbindtodevice(struct sock *sk, char __user *optval,
 
 	/* Sorry... */
 	ret = -EPERM;
-	if (!ns_capable(net->user_ns, CAP_NET_RAW))
+	if (!ns_capable(net->user_ns, CAP_NET_RAW)
+#ifdef CONFIG_ANDROID_PARANOID_NETWORK
+		&& !in_egroup_p(AID_INET)
+#endif
+		)
 		goto out;
 
 	ret = -EINVAL;
@@ -664,6 +692,13 @@ int sock_setsockopt(struct socket *sock, int level, int optname,
 	/*
 	 *	Options without arguments
 	 */
+#ifdef CONFIG_HUAWEI_XENGINE
+	if (optname == SO_XENGINE_PROXYUID)
+		return Emcom_Xengine_SetProxyUid(sk, optval, optlen);
+
+	if (optname == SO_XENGINE_SOCKFLAG)
+		return Emcom_Xengine_SetSockFlag(sk, optval, optlen);
+#endif
 
 	if (optname == SO_BINDTODEVICE)
 		return sock_setbindtodevice(sk, optval, optlen);
@@ -1262,6 +1297,11 @@ int sock_getsockopt(struct socket *sock, int level, int optname,
 		v.val = sk->sk_incoming_cpu;
 		break;
 
+#ifdef CONFIG_HUAWEI_XENGINE
+	case SO_XENGINE_SOCKFLAG:
+		v.val = sk->hicom_flag;
+		break;
+#endif
 
 	case SO_COOKIE:
 		lv = sizeof(u64);
@@ -1291,8 +1331,28 @@ lenout:
  *
  * (We also register the sk_lock with the lock validator.)
  */
-static inline void sock_lock_init(struct sock *sk)
+#ifndef CONFIG_MPTCP
+static inline
+#endif
+void sock_lock_init(struct sock *sk)
 {
+#ifdef CONFIG_MPTCP
+	/* Reclassify the lock-class for subflows */
+	if (sk->sk_type == SOCK_STREAM && sk->sk_protocol == IPPROTO_TCP)
+		if (mptcp(tcp_sk(sk)) || tcp_sk(sk)->is_master_sk) {
+			sock_lock_init_class_and_name(sk, meta_slock_key_name,
+						      &meta_slock_key,
+						      meta_key_name,
+						      &meta_key);
+
+			/* We don't yet have the mptcp-point.
+			 * Thus we still need inet_sock_destruct
+			 */
+			sk->sk_destruct = inet_sock_destruct;
+			return;
+		}
+#endif
+
 	sock_lock_init_class_and_name(sk,
 			af_family_slock_key_strings[sk->sk_family],
 			af_family_slock_keys + sk->sk_family,
@@ -1321,7 +1381,10 @@ static void sock_copy(struct sock *nsk, const struct sock *osk)
 #endif
 }
 
-static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
+#ifndef CONFIG_MPTCP
+static
+#endif
+struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 		int family)
 {
 	struct sock *sk;
@@ -1332,14 +1395,22 @@ static struct sock *sk_prot_alloc(struct proto *prot, gfp_t priority,
 		sk = kmem_cache_alloc(slab, priority & ~__GFP_ZERO);
 		if (!sk)
 			return sk;
+#ifdef CONFIG_MPTCP
+		if (priority & __GFP_ZERO) {
+			if (prot->clear_sk)
+				prot->clear_sk(sk, prot->obj_size);
+			else
+				sk_prot_clear_nulls(sk, prot->obj_size);
+		}
+#else
 		if (priority & __GFP_ZERO)
 			sk_prot_clear_nulls(sk, prot->obj_size);
+#endif
 	} else
 		sk = kmalloc(prot->obj_size, priority);
 
 	if (sk != NULL) {
 		kmemcheck_annotate_bitfield(sk, flags);
-
 		if (security_sk_alloc(sk, family, priority))
 			goto out_free;
 
@@ -1408,6 +1479,11 @@ struct sock *sk_alloc(struct net *net, int family, gfp_t priority,
 
 		mem_cgroup_sk_alloc(sk);
 		cgroup_sk_alloc(&sk->sk_cgrp_data);
+
+#ifdef CONFIG_HWDPI_MODULE
+		sk->sk_hwdpi_mark = 0;
+#endif
+
 		sock_update_classid(&sk->sk_cgrp_data);
 		sock_update_netprioidx(&sk->sk_cgrp_data);
 	}
@@ -1423,6 +1499,10 @@ static void __sk_destruct(struct rcu_head *head)
 {
 	struct sock *sk = container_of(head, struct sock, sk_rcu);
 	struct sk_filter *filter;
+
+#ifdef CONFIG_HUAWEI_BASTET
+	bastet_sock_release(sk);
+#endif
 
 	if (sk->sk_destruct)
 		sk->sk_destruct(sk);
@@ -1532,8 +1612,17 @@ struct sock *sk_clone_lock(const struct sock *sk, const gfp_t priority)
 		atomic_set(&newsk->sk_drops, 0);
 		newsk->sk_send_head	= NULL;
 		newsk->sk_userlocks	= sk->sk_userlocks & ~SOCK_BINDPORT_LOCK;
+#ifdef CONFIG_HUAWEI_BASTET
+		if (sk_fullsock(newsk)) {
+			newsk->bastet = NULL;
+			newsk->reconn = NULL;
+		}
+#endif
 
 		sock_reset_flag(newsk, SOCK_DONE);
+#ifdef CONFIG_MPTCP
+		sock_reset_flag(newsk, SOCK_MPTCP);
+#endif
 		cgroup_sk_alloc(&newsk->sk_cgrp_data);
 		skb_queue_head_init(&newsk->sk_error_queue);
 
@@ -2486,7 +2575,19 @@ void sock_init_data(struct socket *sock, struct sock *sk)
 
 	sk->sk_max_pacing_rate = ~0U;
 	sk->sk_pacing_rate = ~0U;
+	sk->sk_pacing_shift = 10;
 	sk->sk_incoming_cpu = -1;
+#ifdef CONFIG_HUAWEI_XENGINE
+	sk->hicom_flag = 0;
+#endif
+#ifdef CONFIG_HW_DPIMARK_MODULE
+	sk->sk_born_stamp = jiffies;
+#endif
+
+#ifdef CONFIG_HW_STRICT_RST
+	sk->is_strict_rst = false;
+#endif
+
 	/*
 	 * Before updating sk_refcnt, we must commit prior changes to memory
 	 * (Documentation/RCU/rculist_nulls.txt for details)
@@ -2723,6 +2824,10 @@ EXPORT_SYMBOL(compat_sock_common_setsockopt);
 
 void sk_common_release(struct sock *sk)
 {
+#ifdef CONFIG_HW_QTAGUID_PID
+	qtaguid_pid_remove(sk);
+#endif
+
 	if (sk->sk_prot->destroy)
 		sk->sk_prot->destroy(sk);
 

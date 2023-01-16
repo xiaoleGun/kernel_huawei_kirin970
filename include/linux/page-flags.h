@@ -72,6 +72,9 @@
  * SPARSEMEM_EXTREME with !SPARSEMEM_VMEMMAP).
  */
 enum pageflags {
+#ifdef CONFIG_HISI_KERNELDUMP
+	PG_memdump,		/* added for kernel dump. */
+#endif
 	PG_locked,		/* Page is locked. Don't touch. */
 	PG_error,
 	PG_referenced,
@@ -101,9 +104,18 @@ enum pageflags {
 #ifdef CONFIG_MEMORY_FAILURE
 	PG_hwpoison,		/* hardware poisoned page. Don't touch */
 #endif
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
+	PG_compound_lock,
+#endif
 #if defined(CONFIG_IDLE_PAGE_TRACKING) && defined(CONFIG_64BIT)
 	PG_young,
 	PG_idle,
+#endif
+#ifdef CONFIG_TASK_PROTECT_LRU
+	PG_protect,
+#endif
+#ifdef CONFIG_HISI_LB
+	PG_lb,
 #endif
 	__NR_PAGEFLAGS,
 
@@ -277,6 +289,9 @@ PAGEFLAG(Reserved, reserved, PF_NO_COMPOUND)
 PAGEFLAG(SwapBacked, swapbacked, PF_NO_TAIL)
 	__CLEARPAGEFLAG(SwapBacked, swapbacked, PF_NO_TAIL)
 	__SETPAGEFLAG(SwapBacked, swapbacked, PF_NO_TAIL)
+#ifdef CONFIG_HISI_KERNELDUMP
+PAGEFLAG(MemDump, memdump, PF_ANY);   /*added for kernel dump*/
+#endif
 
 /*
  * Private page markings that may be used by the filesystem that owns the page
@@ -347,6 +362,9 @@ PAGEFLAG_FALSE(HWPoison)
 #define __PG_HWPOISON 0
 #endif
 
+#ifdef CONFIG_TASK_PROTECT_LRU
+PAGEFLAG(Protect, protect, PF_ANY)
+#endif
 #if defined(CONFIG_IDLE_PAGE_TRACKING) && defined(CONFIG_64BIT)
 TESTPAGEFLAG(Young, young, PF_ANY)
 SETPAGEFLAG(Young, young, PF_ANY)
@@ -354,6 +372,9 @@ TESTCLEARFLAG(Young, young, PF_ANY)
 PAGEFLAG(Idle, idle, PF_ANY)
 #endif
 
+#ifdef CONFIG_HISI_LB
+PAGEFLAG(LB, lb, PF_ANY)
+#endif
 /*
  * On an anonymous page mapped into a user virtual memory area,
  * page->mapping points to its anon_vma, not to a struct address_space;

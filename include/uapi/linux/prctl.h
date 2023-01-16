@@ -197,6 +197,9 @@ struct prctl_mm_map {
 # define PR_CAP_AMBIENT_LOWER		3
 # define PR_CAP_AMBIENT_CLEAR_ALL	4
 
+#define PR_SET_VMA		0x53564d41
+# define PR_SET_VMA_ANON_NAME		0
+
 /* Per task speculation control */
 #define PR_GET_SPECULATION_CTRL		52
 #define PR_SET_SPECULATION_CTRL		53
@@ -208,8 +211,5 @@ struct prctl_mm_map {
 # define PR_SPEC_ENABLE			(1UL << 1)
 # define PR_SPEC_DISABLE		(1UL << 2)
 # define PR_SPEC_FORCE_DISABLE		(1UL << 3)
-
-#define PR_SET_VMA		0x53564d41
-# define PR_SET_VMA_ANON_NAME		0
 
 #endif /* _LINUX_PRCTL_H */

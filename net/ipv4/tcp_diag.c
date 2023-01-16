@@ -58,7 +58,11 @@ static int tcp_diag_destroy(struct sk_buff *in_skb,
 
 	if (IS_ERR(sk))
 		return PTR_ERR(sk);
-
+#ifdef CONFIG_HW_STRICT_RST
+	if (sk_fullsock(sk)) {
+		sk->is_strict_rst = true;
+	}
+#endif
 	err = sock_diag_destroy(sk, ECONNABORTED);
 
 	sock_gen_put(sk);

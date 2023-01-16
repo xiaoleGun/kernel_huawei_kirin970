@@ -201,6 +201,10 @@ void usb_free_all_descriptors(struct usb_function *f)
 	usb_free_descriptors(f->hs_descriptors);
 	usb_free_descriptors(f->ss_descriptors);
 	usb_free_descriptors(f->ssp_descriptors);
+	f->fs_descriptors = NULL;
+	f->hs_descriptors = NULL;
+	f->ss_descriptors = NULL;
+	f->ssp_descriptors = NULL;
 }
 EXPORT_SYMBOL_GPL(usb_free_all_descriptors);
 

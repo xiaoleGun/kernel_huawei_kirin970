@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * fs/f2fs/node.h
  *
  * Copyright (c) 2012 Samsung Electronics Co., Ltd.
  *             http://www.samsung.com/
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 /* start node id of a node block dedicated to the given node id */
 #define	START_NID(nid) (((nid) / NAT_ENTRY_PER_BLOCK) * NAT_ENTRY_PER_BLOCK)
@@ -132,11 +135,6 @@ static inline bool excess_cached_nats(struct f2fs_sb_info *sbi)
 	return NM_I(sbi)->nat_cnt >= DEF_NAT_CACHE_THRESHOLD;
 }
 
-static inline bool excess_dirty_nodes(struct f2fs_sb_info *sbi)
-{
-	return get_pages(sbi, F2FS_DIRTY_NODES) >= sbi->blocks_per_seg * 8;
-}
-
 enum mem_type {
 	FREE_NIDS,	/* indicates the free nid list */
 	NAT_ENTRIES,	/* indicates the cached nat entry */
@@ -152,6 +150,9 @@ struct nat_entry_set {
 	struct list_head entry_list;	/* link with dirty nat entries */
 	nid_t set;			/* set number*/
 	unsigned int entry_cnt;		/* the # of nat entries in set */
+#ifdef CONFIG_F2FS_JOURNAL_APPEND
+	bool can_merge;
+#endif
 };
 
 struct free_nid {
@@ -292,12 +293,13 @@ static inline void copy_node_footer(struct page *dst, struct page *src)
 
 static inline void fill_node_footer_blkaddr(struct page *page, block_t blkaddr)
 {
+	struct f2fs_sb_info *sbi = F2FS_P_SB(page);
 	struct f2fs_checkpoint *ckpt = F2FS_CKPT(F2FS_P_SB(page));
 	struct f2fs_node *rn = F2FS_NODE(page);
 	__u64 cp_ver = cur_cp_version(ckpt);
 
 	if (__is_set_ckpt_flags(ckpt, CP_CRC_RECOVERY_FLAG))
-		cp_ver |= (cur_cp_crc(ckpt) << 32);
+		cp_ver |= (sbi->ckpt_crc << 32);
 
 	rn->footer.cp_ver = cpu_to_le64(cp_ver);
 	rn->footer.next_blkaddr = cpu_to_le32(blkaddr);
@@ -305,6 +307,7 @@ static inline void fill_node_footer_blkaddr(struct page *page, block_t blkaddr)
 
 static inline bool is_recoverable_dnode(struct page *page)
 {
+	struct f2fs_sb_info *sbi = F2FS_P_SB(page);
 	struct f2fs_checkpoint *ckpt = F2FS_CKPT(F2FS_P_SB(page));
 	__u64 cp_ver = cur_cp_version(ckpt);
 
@@ -313,7 +316,7 @@ static inline bool is_recoverable_dnode(struct page *page)
 		return (cp_ver << 32) == (cpver_of_node(page) << 32);
 
 	if (__is_set_ckpt_flags(ckpt, CP_CRC_RECOVERY_FLAG))
-		cp_ver |= (cur_cp_crc(ckpt) << 32);
+		cp_ver |= (sbi->ckpt_crc << 32);
 
 	return cp_ver == cpver_of_node(page);
 }
@@ -425,12 +428,12 @@ static inline void clear_inline_node(struct page *page)
 	ClearPageChecked(page);
 }
 
-static inline void set_cold_node(struct page *page, bool is_dir)
+static inline void set_cold_node(struct inode *inode, struct page *page)
 {
 	struct f2fs_node *rn = F2FS_NODE(page);
 	unsigned int flag = le32_to_cpu(rn->footer.flag);
 
-	if (is_dir)
+	if (S_ISDIR(inode->i_mode))
 		flag &= ~(0x1 << COLD_BIT_SHIFT);
 	else
 		flag |= (0x1 << COLD_BIT_SHIFT);
@@ -446,10 +449,6 @@ static inline void set_mark(struct page *page, int mark, int type)
 	else
 		flag &= ~(0x1 << type);
 	rn->footer.flag = cpu_to_le32(flag);
-
-#ifdef CONFIG_F2FS_CHECK_FS
-	f2fs_inode_chksum_set(F2FS_P_SB(page), page);
-#endif
 }
 #define set_dentry_mark(page, mark)	set_mark(page, mark, DENT_BIT_SHIFT)
 #define set_fsync_mark(page, mark)	set_mark(page, mark, FSYNC_BIT_SHIFT)

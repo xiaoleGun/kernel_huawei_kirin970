@@ -216,11 +216,21 @@ static inline bool seccomp_may_assign_mode(unsigned long seccomp_mode)
 	return true;
 }
 
-void __weak arch_seccomp_spec_mitigate(struct task_struct *task) { }
+/*
+ * If a given speculation mitigation is opt-in (prctl()-controlled),
+ * select it, by disabling speculation (enabling mitigation).
+ */
+static inline void spec_mitigate(struct task_struct *task,
+				 unsigned long which)
+{
+	int state = arch_prctl_spec_ctrl_get(task, which);
+
+	if (state > 0 && (state & PR_SPEC_PRCTL))
+		arch_prctl_spec_ctrl_set(task, which, PR_SPEC_DISABLE);
+}
 
 static inline void seccomp_assign_mode(struct task_struct *task,
-				       unsigned long seccomp_mode,
-				       unsigned long flags)
+				       unsigned long seccomp_mode)
 {
 	assert_spin_locked(&task->sighand->siglock);
 
@@ -230,9 +240,8 @@ static inline void seccomp_assign_mode(struct task_struct *task,
 	 * filter) is set.
 	 */
 	smp_mb__before_atomic();
-	/* Assume default seccomp processes want spec flaw mitigation. */
-	if ((flags & SECCOMP_FILTER_FLAG_SPEC_ALLOW) == 0)
-		arch_seccomp_spec_mitigate(task);
+	/* Assume seccomp processes want speculation flaw mitigation. */
+	spec_mitigate(task, PR_SPEC_STORE_BYPASS);
 	set_tsk_thread_flag(task, TIF_SECCOMP);
 }
 
@@ -300,7 +309,7 @@ static inline pid_t seccomp_can_sync_threads(void)
  * without dropping the locks.
  *
  */
-static inline void seccomp_sync_threads(unsigned long flags)
+static inline void seccomp_sync_threads(void)
 {
 	struct task_struct *thread, *caller;
 
@@ -341,8 +350,7 @@ static inline void seccomp_sync_threads(unsigned long flags)
 		 * allow one thread to transition the other.
 		 */
 		if (thread->seccomp.mode == SECCOMP_MODE_DISABLED)
-			seccomp_assign_mode(thread, SECCOMP_MODE_FILTER,
-					    flags);
+			seccomp_assign_mode(thread, SECCOMP_MODE_FILTER);
 	}
 }
 
@@ -461,7 +469,7 @@ static long seccomp_attach_filter(unsigned int flags,
 
 	/* Now that the new filter is in place, synchronize to all threads. */
 	if (flags & SECCOMP_FILTER_FLAG_TSYNC)
-		seccomp_sync_threads(flags);
+		seccomp_sync_threads();
 
 	return 0;
 }
@@ -721,7 +729,7 @@ static long seccomp_set_mode_strict(void)
 #ifdef TIF_NOTSC
 	disable_TSC();
 #endif
-	seccomp_assign_mode(current, seccomp_mode, 0);
+	seccomp_assign_mode(current, seccomp_mode);
 	ret = 0;
 
 out:
@@ -779,7 +787,7 @@ static long seccomp_set_mode_filter(unsigned int flags,
 	/* Do not free the successfully attached filter. */
 	prepared = NULL;
 
-	seccomp_assign_mode(current, seccomp_mode, flags);
+	seccomp_assign_mode(current, seccomp_mode);
 out:
 	spin_unlock_irq(&current->sighand->siglock);
 	if (flags & SECCOMP_FILTER_FLAG_TSYNC)

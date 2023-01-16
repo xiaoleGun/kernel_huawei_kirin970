@@ -31,6 +31,10 @@
 #include "binder_alloc.h"
 #include "binder_trace.h"
 
+#ifdef CONFIG_HUAWEI_KSTATE
+#include <huawei_platform/power/hw_kcollect.h>
+#endif
+
 struct list_lru binder_alloc_lru;
 
 static DEFINE_MUTEX(binder_alloc_mmap_lock);
@@ -363,6 +367,22 @@ static struct binder_buffer *binder_alloc_new_buf_locked(
 				alloc->pid, extra_buffers_size);
 		return ERR_PTR(-EINVAL);
 	}
+
+#ifdef CONFIG_HUAWEI_KSTATE
+	/*
+	* if async and no more async space left.
+	* data bigger 1/3 buffer or buffer free lower 100K
+	*/
+	if (is_async
+		&& (alloc->free_async_space
+			< 3*(size + sizeof(struct binder_buffer))
+			|| alloc->free_async_space < 100*1024)) {
+		pr_warn("will no more space [freed:%zd][alloc size:%zd], pid [%d]\n",
+			alloc->free_async_space, size, alloc->pid);
+		hwbinderinfo(-1, alloc->pid);
+	}
+#endif
+
 	if (is_async &&
 	    alloc->free_async_space < size + sizeof(struct binder_buffer)) {
 		binder_alloc_debug(BINDER_DEBUG_BUFFER_ALLOC,
@@ -475,6 +495,11 @@ static struct binder_buffer *binder_alloc_new_buf_locked(
 			     "%d: binder_alloc_buf size %zd async free %zd\n",
 			      alloc->pid, size, alloc->free_async_space);
 	}
+
+#ifdef CONFIG_HUAWEI_BINDER_ASHMEM
+	buffer->ashmem.file = NULL;
+#endif
+
 	return buffer;
 
 err_alloc_buf_struct_failed:
@@ -635,6 +660,10 @@ static void binder_free_buf_locked(struct binder_alloc *alloc,
 void binder_alloc_free_buf(struct binder_alloc *alloc,
 			    struct binder_buffer *buffer)
 {
+#ifdef CONFIG_HUAWEI_BINDER_ASHMEM
+	binder_ashmem_unmap(alloc, buffer);
+#endif
+
 	mutex_lock(&alloc->mutex);
 	binder_free_buf_locked(alloc, buffer);
 	mutex_unlock(&alloc->mutex);
@@ -751,6 +780,10 @@ void binder_alloc_deferred_release(struct binder_alloc *alloc)
 
 		/* Transaction should already have been freed */
 		BUG_ON(buffer->transaction);
+
+#ifdef CONFIG_HUAWEI_BINDER_ASHMEM
+		binder_ashmem_recycle(buffer);
+#endif
 
 		binder_free_buf_locked(alloc, buffer);
 		buffers++;
@@ -923,14 +956,13 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 
 	index = page - alloc->pages;
 	page_addr = (uintptr_t)alloc->buffer + index * PAGE_SIZE;
+
+	mm = alloc->vma_vm_mm;
+	if (!mmget_not_zero(mm))
+		goto err_mmget;
+	if (!down_write_trylock(&mm->mmap_sem))
+		goto err_down_write_mmap_sem_failed;
 	vma = alloc->vma;
-	if (vma) {
-		if (!mmget_not_zero(alloc->vma_vm_mm))
-			goto err_mmget;
-		mm = alloc->vma_vm_mm;
-		if (!down_write_trylock(&mm->mmap_sem))
-			goto err_down_write_mmap_sem_failed;
-	}
 
 	list_lru_isolate(lru, item);
 	spin_unlock(lock);
@@ -944,10 +976,9 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 			       PAGE_SIZE, NULL);
 
 		trace_binder_unmap_user_end(alloc, index);
-
-		up_write(&mm->mmap_sem);
-		mmput(mm);
 	}
+	up_write(&mm->mmap_sem);
+	mmput(mm);
 
 	trace_binder_unmap_kernel_start(alloc, index);
 

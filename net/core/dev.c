@@ -3661,6 +3661,9 @@ static int get_rps_cpu(struct net_device *dev, struct sk_buff *skb,
 		 *     have been dequeued, thus preserving in order delivery.
 		 */
 		if (unlikely(tcpu != next_cpu) &&
+#ifdef CONFIG_HISI_RFS_RPS_MATCH
+		    unlikely(!map || cpumask_test_cpu(next_cpu, &map->cpus_mask)) &&
+#endif
 		    (tcpu >= nr_cpu_ids || !cpu_online(tcpu) ||
 		     ((int)(per_cpu(softnet_data, tcpu).input_queue_head -
 		      rflow->last_qtail)) >= 0)) {
@@ -4756,10 +4759,6 @@ static void napi_reuse_skb(struct napi_struct *napi, struct sk_buff *skb)
 	skb->vlan_tci = 0;
 	skb->dev = napi->dev;
 	skb->skb_iif = 0;
-
-	/* eth_type_trans() assumes pkt_type is PACKET_HOST */
-	skb->pkt_type = PACKET_HOST;
-
 	skb->encapsulation = 0;
 	skb_shinfo(skb)->gso_type = 0;
 	skb->truesize = SKB_TRUESIZE(skb_end_offset(skb));
@@ -6478,10 +6477,17 @@ int __dev_change_flags(struct net_device *dev, unsigned int flags)
 
 	dev->flags = (flags & (IFF_DEBUG | IFF_NOTRAILERS | IFF_NOARP |
 			       IFF_DYNAMIC | IFF_MULTICAST | IFF_PORTSEL |
+#ifdef CONFIG_MPTCP
+			       IFF_NOMULTIPATH | IFF_MPBACKUP |
+#endif
 			       IFF_AUTOMEDIA)) |
 		     (dev->flags & (IFF_UP | IFF_VOLATILE | IFF_PROMISC |
 				    IFF_ALLMULTI));
 
+#ifdef CONFIG_MPTCP
+	if (old_flags & IFF_NOMULTIPATH)
+		dev->flags |= IFF_NOMULTIPATH;
+#endif
 	/*
 	 *	Load in the correct multicast list now the flags have changed.
 	 */

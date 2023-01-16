@@ -38,7 +38,7 @@ $(obj)/Image-dtb: $(obj)/Image $(DTB_OBJS) FORCE
 	$(call if_changed,cat)
 
 $(obj)/Image.gz: $(obj)/Image FORCE
-	$(call if_changed,gzip)
+	$(call if_changed,minigzip)
 
 $(obj)/Image.lz4: $(obj)/Image FORCE
 	$(call if_changed,lz4)

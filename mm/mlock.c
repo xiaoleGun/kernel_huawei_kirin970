@@ -23,6 +23,9 @@
 #include <linux/mm_inline.h>
 
 #include "internal.h"
+#ifdef CONFIG_TASK_PROTECT_LRU
+#include <linux/hisi/protect_lru.h>
+#endif
 
 bool can_do_mlock(void)
 {
@@ -106,6 +109,9 @@ static bool __munlock_isolate_lru_page(struct page *page, bool getpage)
 		lruvec = mem_cgroup_page_lruvec(page, page_pgdat(page));
 		if (getpage)
 			get_page(page);
+#ifdef CONFIG_TASK_PROTECT_LRU
+		del_page_from_protect_lru_list(page, lruvec);
+#endif
 		ClearPageLRU(page);
 		del_page_from_lru_list(page, lruvec, page_lru(page));
 		return true;
@@ -438,7 +444,13 @@ static unsigned long __munlock_pagevec_fill(struct pagevec *pvec,
 void munlock_vma_pages_range(struct vm_area_struct *vma,
 			     unsigned long start, unsigned long end)
 {
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	vm_write_begin(vma);
+	WRITE_ONCE(vma->vm_flags, vma->vm_flags & VM_LOCKED_CLEAR_MASK);
+	vm_write_end(vma);
+#else
 	vma->vm_flags &= VM_LOCKED_CLEAR_MASK;
+#endif
 
 	while (start < end) {
 		struct page *page;
@@ -564,8 +576,16 @@ success:
 	 * set VM_LOCKED, populate_vma_page_range will bring it back.
 	 */
 
-	if (lock)
-		vma->vm_flags = newflags;
+	if (lock) 
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	{
+		vm_write_begin(vma);
+		WRITE_ONCE(vma->vm_flags, newflags);
+		vm_write_end(vma);
+	}
+#else
+		vma->vm_flags = newflags;	
+#endif	
 	else
 		munlock_vma_pages_range(vma, start, end);
 

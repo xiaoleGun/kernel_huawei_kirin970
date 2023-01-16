@@ -20,10 +20,20 @@
 #include <linux/sizes.h>
 #include <linux/limits.h>
 #include <linux/clk/clk-conf.h>
+#include <linux/arm-smccc.h>
 
 #include <asm/irq.h>
 
 #define to_amba_driver(d)	container_of(d, struct amba_driver, drv)
+
+#define HISI_SECURE_GPIO_READ_REG   0xc5010004
+static unsigned int amba_secure_readl(int offset)
+{
+	struct arm_smccc_res res;
+
+	arm_smccc_1_1_smc(HISI_SECURE_GPIO_READ_REG, offset, &res);//lint !e1514
+	return (u32)res.a1;
+}
 
 static const struct amba_id *
 amba_lookup(const struct amba_id *table, struct amba_device *dev)
@@ -231,6 +241,9 @@ static void amba_put_disable_pclk(struct amba_device *pcdev)
 	clk_put(pcdev->pclk);
 }
 
+#if defined CONFIG_HISI_SPI
+#define SPI_NAME_LEN 9
+#endif
 /*
  * These are the device model conversion veneers; they convert the
  * device model structures to our more specific structures.
@@ -262,15 +275,27 @@ static int amba_probe(struct device *dev)
 		pm_runtime_enable(dev);
 
 		ret = pcdrv->probe(pcdev, id);
+#if defined CONFIG_HISI_SPI
+		if (strncmp(pcdrv->drv.name, "ssp-pl022", SPI_NAME_LEN)) {
+			if (ret == 0)
+				break;
+		}
+#else
 		if (ret == 0)
 			break;
-
+#endif
 		pm_runtime_disable(dev);
 		pm_runtime_set_suspended(dev);
 		pm_runtime_put_noidle(dev);
 
 		amba_put_disable_pclk(pcdev);
+
+#if defined CONFIG_HISI_SPI
+		if (ret)
 		dev_pm_domain_detach(dev, true);
+#else
+		dev_pm_domain_detach(dev, true);
+#endif
 	} while (0);
 
 	return ret;
@@ -388,13 +413,24 @@ static int amba_device_try_add(struct amba_device *dev, struct resource *parent)
 		 * Read pid and cid based on size of resource
 		 * they are located at end of region
 		 */
-		for (pid = 0, i = 0; i < 4; i++)
-			pid |= (readl(tmp + size - 0x20 + 4 * i) & 255) <<
-				(i * 8);
-		for (cid = 0, i = 0; i < 4; i++)
-			cid |= (readl(tmp + size - 0x10 + 4 * i) & 255) <<
-				(i * 8);
-
+		for (pid = 0, i = 0; i < 4; i++) {
+			if (dev->secure_mode) {
+				pid |= (amba_secure_readl(size - 0x20 + 4 * i)& 255) <<
+					(i * 8);
+			} else {
+				pid |= (readl(tmp + size - 0x20 + 4 * i) & 255) <<
+					(i * 8);
+			}
+		}
+		for (cid = 0, i = 0; i < 4; i++) {
+			if (dev->secure_mode) {
+				cid |= (amba_secure_readl(size - 0x10 + 4 * i) & 255) <<
+					(i * 8);
+			} else {
+				cid |= (readl(tmp + size - 0x10 + 4 * i) & 255) <<
+					(i * 8);
+			}
+		}
 		amba_put_disable_pclk(dev);
 
 		if (cid == AMBA_CID || cid == CORESIGHT_CID)

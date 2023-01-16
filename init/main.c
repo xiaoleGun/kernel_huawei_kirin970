@@ -89,6 +89,9 @@
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
 
+#ifdef CONFIG_HUAWEI_BOOT_TIME
+#include <huawei_platform/boottime/hw_boottime.h>
+#endif
 static int kernel_init(void *);
 
 extern void init_IRQ(void);
@@ -478,6 +481,35 @@ static void __init mm_init(void)
 	kaiser_init();
 }
 
+#ifdef CMDLINE_INFO_FILTER
+static void __init filter_args(char *cmdline) {
+	static char tmp_cmdline[COMMAND_LINE_SIZE] __initdata;
+	char *cmd_prefix = NULL;
+	char *cmd_suffix = NULL;
+	int len = 0;
+	strlcpy(tmp_cmdline, cmdline, COMMAND_LINE_SIZE);
+	cmd_prefix = strstr(tmp_cmdline, "androidboot.serialno");
+	if (cmd_prefix == NULL) {
+		pr_notice("Kernel command line: %s\n", tmp_cmdline);
+		return;
+	}
+	cmd_suffix = strstr(cmd_prefix, " ");
+	len = (cmd_suffix != NULL) ? (cmd_suffix - cmd_prefix)
+                             : (cmdline + strlen(cmdline) - cmd_prefix);
+	memset(cmd_prefix, '*', len);
+	pr_notice("Kernel command line: %s\n", tmp_cmdline);
+	return;
+}
+#endif
+
+#ifdef CONFIG_DEBUG_RODATA
+void mark_constdata_ro(void);
+#else
+static void mark_constdata_ro(void)
+{
+}
+#endif
+
 asmlinkage __visible void __init start_kernel(void)
 {
 	char *command_line;
@@ -505,6 +537,10 @@ asmlinkage __visible void __init start_kernel(void)
 	page_address_init();
 	pr_notice("%s", linux_banner);
 	setup_arch(&command_line);
+#ifdef CONFIG_HISI_EARLY_RODATA_PROTECTION
+/* setup_arch is the last function to alter the constdata content */
+	mark_constdata_ro();
+#endif
 	mm_init_cpumask(&init_mm);
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
@@ -515,7 +551,9 @@ asmlinkage __visible void __init start_kernel(void)
 	build_all_zonelists(NULL, NULL);
 	page_alloc_init();
 
-	pr_notice("Kernel command line: %s\n", boot_command_line);
+#ifdef CMDLINE_INFO_FILTER
+	filter_args(boot_command_line);
+#endif
 	parse_early_param();
 	after_dashes = parse_args("Booting kernel",
 				  static_command_line, __start___param,
@@ -777,7 +815,11 @@ int __init_or_module do_one_initcall(initcall_t fn)
 	if (initcall_debug)
 		ret = do_one_initcall_debug(fn);
 	else
+#ifdef CONFIG_HUAWEI_BOOT_TIME
+		ret = do_boottime_initcall(fn);
+#else
 		ret = fn();
+#endif
 
 	msgbuf[0] = 0;
 
@@ -927,10 +969,14 @@ __setup("rodata=", set_debug_rodata);
 #ifdef CONFIG_DEBUG_RODATA
 static void mark_readonly(void)
 {
-	if (rodata_enabled)
+	if (rodata_enabled) {
+#ifndef CONFIG_HISI_EARLY_RODATA_PROTECTION
+		mark_constdata_ro();
+#endif
 		mark_rodata_ro();
-	else
+	} else {
 		pr_info("Kernel memory protection disabled.\n");
+	}
 }
 #else
 static inline void mark_readonly(void)
@@ -953,6 +999,10 @@ static int __ref kernel_init(void *unused)
 
 	rcu_end_inkernel_boot();
 
+	pr_err("Kernel init end, jump to execute /init\n");
+#ifdef CONFIG_HUAWEI_BOOT_TIME
+	boot_record("[INFOR] Kernel_init_done");
+#endif
 	if (ramdisk_execute_command) {
 		ret = run_init_process(ramdisk_execute_command);
 		if (!ret)
@@ -971,6 +1021,11 @@ static int __ref kernel_init(void *unused)
 		ret = run_init_process(execute_command);
 		if (!ret)
 			return 0;
+#ifdef CONFIG_HISI_ENGINEER_MODE
+		ret = run_init_process("/init");
+		if (!ret)
+			return 0;
+#endif
 		panic("Requested init %s failed (error %d).",
 		      execute_command, ret);
 	}

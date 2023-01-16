@@ -17,6 +17,7 @@
 #include <linux/blkdev.h>
 #include <linux/pagevec.h>
 #include <linux/migrate.h>
+#include <linux/hisi/page_tracker.h>
 
 #include <asm/pgtable.h>
 
@@ -98,6 +99,8 @@ int __add_to_swap_cache(struct page *page, swp_entry_t entry)
 	if (likely(!error)) {
 		address_space->nrpages++;
 		__inc_node_page_state(page, NR_FILE_PAGES);
+		__inc_zone_page_state(page, NR_SWAPCACHE);
+		page_tracker_set_type(page, TRACK_FILE, 0);
 		INC_CACHE_INFO(add_total);
 	}
 	spin_unlock_irq(&address_space->tree_lock);
@@ -150,6 +153,7 @@ void __delete_from_swap_cache(struct page *page)
 	ClearPageSwapCache(page);
 	address_space->nrpages--;
 	__dec_node_page_state(page, NR_FILE_PAGES);
+	__dec_zone_page_state(page, NR_SWAPCACHE);
 	INC_CACHE_INFO(del_total);
 }
 
@@ -467,6 +471,10 @@ static unsigned long swapin_nr_pages(unsigned long offset)
  * the readahead.
  *
  * Caller must hold down_read on the vma->vm_mm if vma is not NULL.
+ * This is needed to ensure the VMA will not be freed in our back. In the case
+ * of the speculative page fault handler, this cannot happen, even if we don't
+ * hold the mmap_sem. Callees are assumed to take care of reading VMA's fields
+ * using READ_ONCE() to read consistent values. 
  */
 struct page *swapin_readahead(swp_entry_t entry, gfp_t gfp_mask,
 			struct vm_area_struct *vma, unsigned long addr)

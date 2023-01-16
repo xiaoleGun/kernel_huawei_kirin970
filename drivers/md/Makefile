@@ -17,6 +17,11 @@ dm-cache-smq-y   += dm-cache-policy-smq.o
 dm-cache-cleaner-y += dm-cache-policy-cleaner.o
 dm-era-y	+= dm-era-target.o
 dm-verity-y	+= dm-verity-target.o
+
+ifeq ($(CONFIG_OEM_DEFINE_VERITY_FEC),y)
+dm-verity-y     += verity_handle.o
+endif
+
 md-mod-y	+= md.o bitmap.o
 raid456-y	+= raid5.o raid5-cache.o
 

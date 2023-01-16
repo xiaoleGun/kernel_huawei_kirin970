@@ -28,7 +28,9 @@
 #include <linux/dma-contiguous.h>
 #include <linux/vmalloc.h>
 #include <linux/swiotlb.h>
-
+#ifdef CONFIG_HISI_LB
+#include <linux/hisi/hisi_lb.h>
+#endif
 #include <asm/cacheflush.h>
 
 static int swiotlb __ro_after_init;
@@ -173,6 +175,10 @@ static void *__dma_alloc(struct device *dev, size_t size,
 
 	/* create a coherent mapping */
 	page = virt_to_page(ptr);
+#ifdef CONFIG_HISI_LB
+	if (PageLB(page))
+		lb_prot_build(page, &prot);
+#endif
 	coherent_ptr = dma_common_contiguous_remap(page, size, VM_USERMAP,
 						   prot, __builtin_return_address(0));
 	if (!coherent_ptr)
@@ -211,6 +217,16 @@ static dma_addr_t __swiotlb_map_page(struct device *dev, struct page *page,
 	dma_addr_t dev_addr;
 
 	dev_addr = swiotlb_map_page(dev, page, offset, size, dir, attrs);
+
+#ifdef CONFIG_HISI_LB
+	if (PageLB(page)) {
+		BUG_ON(is_device_dma_coherent(dev));
+		BUG_ON(offset != 0);
+		BUG_ON(size != PAGE_SIZE);
+		__dma_map_area(lb_page_to_virt(page), size, dir);
+		return dev_addr;
+	}
+#endif
 	if (!is_device_dma_coherent(dev))
 		__dma_map_area(phys_to_virt(dma_to_phys(dev, dev_addr)), size, dir);
 
@@ -222,6 +238,17 @@ static void __swiotlb_unmap_page(struct device *dev, dma_addr_t dev_addr,
 				 size_t size, enum dma_data_direction dir,
 				 unsigned long attrs)
 {
+#ifdef CONFIG_HISI_LB
+	phys_addr_t phys = dma_to_phys(dev, dev_addr);
+	struct page *page = phys_to_page(phys);
+
+	if (PageLB(page)) {
+		BUG_ON(is_device_dma_coherent(dev));
+		BUG_ON(size != PAGE_SIZE);
+		__dma_unmap_area(lb_page_to_virt(page), size, dir);
+		return;
+	}
+#endif
 	if (!is_device_dma_coherent(dev))
 		__dma_unmap_area(phys_to_virt(dma_to_phys(dev, dev_addr)), size, dir);
 	swiotlb_unmap_page(dev, dev_addr, size, dir, attrs);
@@ -262,6 +289,18 @@ static void __swiotlb_sync_single_for_cpu(struct device *dev,
 					  dma_addr_t dev_addr, size_t size,
 					  enum dma_data_direction dir)
 {
+#ifdef CONFIG_HISI_LB
+	phys_addr_t phys = dma_to_phys(dev, dev_addr);
+	struct page *page = phys_to_page(phys);
+
+	if (PageLB(page)) {
+		unsigned long offset = phys & ~PAGE_MASK;
+		BUG_ON(is_device_dma_coherent(dev));
+		BUG_ON(offset + size > PAGE_SIZE); /* compound page? */
+		__dma_unmap_area(lb_page_to_virt(page) + offset, size, dir);
+		return;
+	}
+#endif
 	if (!is_device_dma_coherent(dev))
 		__dma_unmap_area(phys_to_virt(dma_to_phys(dev, dev_addr)), size, dir);
 	swiotlb_sync_single_for_cpu(dev, dev_addr, size, dir);
@@ -271,6 +310,18 @@ static void __swiotlb_sync_single_for_device(struct device *dev,
 					     dma_addr_t dev_addr, size_t size,
 					     enum dma_data_direction dir)
 {
+#ifdef CONFIG_HISI_LB
+	phys_addr_t phys = dma_to_phys(dev, dev_addr);
+	struct page *page = phys_to_page(phys);
+
+	if (PageLB(page)) {
+		unsigned long offset = phys & ~PAGE_MASK;
+		BUG_ON(is_device_dma_coherent(dev));
+		BUG_ON(offset + size > PAGE_SIZE);
+		__dma_map_area(lb_page_to_virt(page) + offset, size, dir);
+		return;
+	}
+#endif
 	swiotlb_sync_single_for_device(dev, dev_addr, size, dir);
 	if (!is_device_dma_coherent(dev))
 		__dma_map_area(phys_to_virt(dma_to_phys(dev, dev_addr)), size, dir);
@@ -318,6 +369,11 @@ static int __swiotlb_mmap(struct device *dev,
 
 	vma->vm_page_prot = __get_dma_pgprot(attrs, vma->vm_page_prot,
 					     is_device_dma_coherent(dev));
+
+#ifdef CONFIG_HISI_LB
+	if (PageLB(pfn_to_page(pfn)))
+		(void)lb_prot_build(pfn_to_page(pfn), &vma->vm_page_prot);
+#endif
 
 	if (dma_mmap_from_coherent(dev, vma, cpu_addr, size, &ret))
 		return ret;
@@ -532,7 +588,7 @@ EXPORT_SYMBOL(dummy_dma_ops);
 static int __init arm64_dma_init(void)
 {
 	if (swiotlb_force == SWIOTLB_FORCE ||
-	    max_pfn > (arm64_dma_phys_limit >> PAGE_SHIFT))
+	    max_pfn >= (arm64_dma_phys_limit >> PAGE_SHIFT))
 		swiotlb = 1;
 
 	return atomic_pool_init();

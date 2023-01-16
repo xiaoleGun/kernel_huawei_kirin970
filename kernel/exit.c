@@ -54,6 +54,7 @@
 #include <linux/writeback.h>
 #include <linux/shm.h>
 #include <linux/kcov.h>
+#include <linux/cpufreq_times.h>
 
 #include "sched/tune.h"
 
@@ -61,6 +62,10 @@
 #include <asm/unistd.h>
 #include <asm/pgtable.h>
 #include <asm/mmu_context.h>
+
+#ifdef CONFIG_HWAA
+#include <huawei_platform/hwaa/hwaa_proc_hooks.h>
+#endif
 
 static void __unhash_process(struct task_struct *p, bool group_dead)
 {
@@ -171,6 +176,9 @@ void release_task(struct task_struct *p)
 {
 	struct task_struct *leader;
 	int zap_leader;
+#ifdef CONFIG_CPU_FREQ_TIMES
+	cpufreq_task_times_exit(p);
+#endif
 repeat:
 	/* don't need to get the RCU readlock here - the process is dead and
 	 * can't be modifying its own credentials. But shut RCU-lockdep up */
@@ -756,6 +764,10 @@ void __noreturn do_exit(long code)
 
 	validate_creds_for_do_exit(tsk);
 
+#ifdef CONFIG_HWAA
+	hwaa_proc_on_task_exit(tsk);
+#endif
+
 	/*
 	 * We're taking recursive faults here in do_exit. Safest is to just
 	 * leave this task alone and wait for reboot.
@@ -778,6 +790,7 @@ void __noreturn do_exit(long code)
 
 	exit_signals(tsk);  /* sets PF_EXITING */
 
+	sched_exit(tsk);
 	schedtune_exit_task(tsk);
 
 	/*
@@ -887,7 +900,9 @@ void __noreturn do_exit(long code)
 		__this_cpu_add(dirty_throttle_leaks, tsk->nr_dirtied);
 	exit_rcu();
 	TASKS_RCU(__srcu_read_unlock(&tasks_rcu_exit_srcu, tasks_rcu_i));
-
+#ifdef CONFIG_HISI_SWAP_ZDATA
+	exit_proc_reclaim(tsk);
+#endif
 	do_task_dead();
 }
 EXPORT_SYMBOL_GPL(do_exit);
@@ -938,6 +953,41 @@ do_group_exit(int exit_code)
 	/* NOTREACHED */
 }
 
+#ifdef CONFIG_HW_DIE_CATCH
+/*
+ * catch_unexpected_exit,
+ * difficult :if the signal handler, call exit, it maybe will have some nested handler
+ */
+int catch_unexpected_exit(int exit_code)
+{
+	struct signal_struct *sig = current->signal;
+	siginfo_t info;
+	unsigned short die_catch_flags = sig->unexpected_die_catch_flags;
+
+	/*reset the unexpected_die_catch_flags to avoid recursive in signal handler*/
+	sig->unexpected_die_catch_flags = 0;
+
+	/*print critical process exit info*/
+	if (die_catch_flags & EXIT_CATCH_FLAG) {
+		pr_warn("ExitCatch: %s[%d] exited with exit_code %d\n",
+				current->comm, task_pid_nr(current), exit_code);
+	}
+
+	if (die_catch_flags & EXIT_CATCH_ABORT_FLAG) {
+		/*
+		* Send a SIGABRT, regardless of whether we were in kernel
+		* or user mode.
+		*/
+		info.si_signo = SIGABRT;
+		info.si_errno = 0;
+		info.si_code = 0;
+		force_sig_info(SIGABRT, &info, current);
+		return 1;
+	}
+	return 0;
+}
+#endif
+
 /*
  * this kills every thread in the thread group. Note that any externally
  * wait4()-ing process will get the correct exit code - even if this
@@ -945,7 +995,13 @@ do_group_exit(int exit_code)
  */
 SYSCALL_DEFINE1(exit_group, int, error_code)
 {
+#ifdef CONFIG_HW_DIE_CATCH
+	if (!catch_unexpected_exit(error_code)) {
+		do_group_exit((error_code & 0xff) << 8);
+	}
+#else
 	do_group_exit((error_code & 0xff) << 8);
+#endif
 	/* NOTREACHED */
 	return 0;
 }

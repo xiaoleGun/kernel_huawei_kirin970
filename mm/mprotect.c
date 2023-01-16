@@ -378,13 +378,20 @@ success:
 	 * vm_flags and vm_page_prot are protected by the mmap_sem
 	 * held in write mode.
 	 */
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	vm_write_begin(vma);
+	WRITE_ONCE(vma->vm_flags, newflags);
+#else
 	vma->vm_flags = newflags;
+#endif
 	dirty_accountable = vma_wants_writenotify(vma, vma->vm_page_prot);
 	vma_set_page_prot(vma);
 
 	change_protection(vma, start, end, vma->vm_page_prot,
 			  dirty_accountable, 0);
-
+#ifdef CONFIG_SPECULATIVE_PAGE_FAULT
+	vm_write_end(vma);
+#endif
 	/*
 	 * Private VM_LOCKED VMA becoming writable: trigger COW to avoid major
 	 * fault on access.

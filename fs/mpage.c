@@ -535,7 +535,7 @@ static int __mpage_writepage(struct page *page, struct writeback_control *wbc,
 	struct buffer_head map_bh;
 	loff_t i_size = i_size_read(inode);
 	int ret = 0;
-	int op_flags = (wbc->sync_mode == WB_SYNC_ALL ?  WRITE_SYNC : 0);
+	int op_flags = wbc_to_write_flag(wbc);
 
 	if (page_has_buffers(page)) {
 		struct buffer_head *head = page_buffers(page);
@@ -708,6 +708,16 @@ out:
 	return ret;
 }
 
+void submit_bio_first(struct page *page, struct writeback_control *wbc, void *data)
+{
+	struct mpage_data *mpd = (struct mpage_data *)data;
+
+	if (mpd && mpd->bio) {
+		int op_flags = (wbc->sync_mode == WB_SYNC_ALL ? WRITE_SYNC : 0);
+		mpd->bio = mpage_bio_submit(REQ_OP_WRITE, op_flags, mpd->bio);
+	}
+}
+
 /**
  * mpage_writepages - walk the list of dirty pages of the given address space & writepage() all of them
  * @mapping: address space structure to write
@@ -746,7 +756,7 @@ mpage_writepages(struct address_space *mapping,
 			.use_writepage = 1,
 		};
 
-		ret = write_cache_pages(mapping, wbc, __mpage_writepage, &mpd);
+		ret = __write_cache_pages(mapping, wbc, __mpage_writepage, &mpd, submit_bio_first);
 		if (mpd.bio) {
 			int op_flags = (wbc->sync_mode == WB_SYNC_ALL ?
 				  WRITE_SYNC : 0);

@@ -422,8 +422,13 @@ restart:
 
 				snprintf(s, sizeof(s), "audit_pid=%d reset", audit_pid);
 				audit_log_lost(s);
+				mutex_lock(&audit_cmd_mutex);
+				if (audit_sock) {
+					sock_put(audit_sock);
+					audit_sock = NULL;
+				}
 				audit_pid = 0;
-				audit_sock = NULL;
+				mutex_unlock(&audit_cmd_mutex);
 			} else {
 				pr_warn("re-scheduling(#%d) write to audit_pid=%d\n",
 					attempts, audit_pid);
@@ -899,8 +904,11 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 			}
 			if (audit_enabled != AUDIT_OFF)
 				audit_log_config_change("audit_pid", new_pid, audit_pid, 1);
+			if (audit_sock)
+				sock_put(audit_sock);
 			audit_pid = new_pid;
 			audit_nlk_portid = NETLINK_CB(skb).portid;
+			sock_hold(skb->sk);
 			audit_sock = skb->sk;
 		}
 		if (s.mask & AUDIT_STATUS_RATE_LIMIT) {
@@ -1169,10 +1177,15 @@ static void __net_exit audit_net_exit(struct net *net)
 {
 	struct audit_net *aunet = net_generic(net, audit_net_id);
 	struct sock *sock = aunet->nlsk;
+	mutex_lock(&audit_cmd_mutex);
 	if (sock == audit_sock) {
+		if (audit_sock) {
+			sock_put(audit_sock);
+			audit_sock = NULL;
+		}
 		audit_pid = 0;
-		audit_sock = NULL;
 	}
+	mutex_unlock(&audit_cmd_mutex);
 
 	RCU_INIT_POINTER(aunet->nlsk, NULL);
 	synchronize_net();

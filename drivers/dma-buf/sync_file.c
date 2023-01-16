@@ -25,6 +25,11 @@
 #include <linux/anon_inodes.h>
 #include <linux/sync_file.h>
 #include <uapi/linux/sync_file.h>
+#define CREATE_TRACE_POINTS
+#include "fence_trace.h"
+#ifdef CONFIG_HW_FDLEAK
+#include <chipset_common/hwfdleak/fdleak.h>
+#endif
 
 static const struct file_operations sync_file_fops;
 
@@ -47,6 +52,9 @@ static struct sync_file *sync_file_alloc(void)
 
 	INIT_LIST_HEAD(&sync_file->cb.node);
 
+#ifdef CONFIG_HW_FDLEAK
+	fdleak_report(FDLEAK_WP_SYNCFENCE, 0);
+#endif
 	return sync_file;
 
 err:
@@ -86,7 +94,9 @@ struct sync_file *sync_file_create(struct fence *fence)
 		 fence->ops->get_driver_name(fence),
 		 fence->ops->get_timeline_name(fence), fence->context,
 		 fence->seqno);
-
+#ifdef CONFIG_HW_FDLEAK
+	trace_sync_name(sync_file, current->tgid);
+#endif
 	return sync_file;
 }
 EXPORT_SYMBOL(sync_file_create);
@@ -283,6 +293,9 @@ static void sync_file_free(struct kref *kref)
 		fence_remove_callback(sync_file->fence, &sync_file->cb);
 	fence_put(sync_file->fence);
 	kfree(sync_file);
+#ifdef CONFIG_HW_FDLEAK
+	fdleak_report(FDLEAK_WP_SYNCFENCE, 1);
+#endif
 }
 
 static int sync_file_release(struct inode *inode, struct file *file)

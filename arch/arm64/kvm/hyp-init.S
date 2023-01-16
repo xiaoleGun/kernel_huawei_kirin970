@@ -28,7 +28,7 @@
 
 	.align	11
 
-ENTRY(__kvm_hyp_init)
+ENTRY_NOTAG(__kvm_hyp_init)
 	ventry	__invalid		// Synchronous EL2t
 	ventry	__invalid		// IRQ EL2t
 	ventry	__invalid		// FIQ EL2t
@@ -117,10 +117,6 @@ CPU_BE(	orr	x4, x4, #SCTLR_ELx_EE)
 	mov	sp, x1
 	kern_hyp_va	x2
 	msr	vbar_el2, x2
-
-	/* copy tpidr_el1 into tpidr_el2 for use by HYP */
-	mrs	x1, tpidr_el1
-	msr	tpidr_el2, x1
 
 	/* Hello, World! */
 	eret

@@ -36,7 +36,6 @@
 #include <linux/slab.h>
 #include <linux/amd-iommu.h>
 #include <linux/hashtable.h>
-#include <linux/frame.h>
 
 #include <asm/apic.h>
 #include <asm/perf_event.h>
@@ -45,8 +44,6 @@
 #include <asm/debugreg.h>
 #include <asm/kvm_para.h>
 #include <asm/irq_remapping.h>
-#include <asm/microcode.h>
-#include <asm/spec-ctrl.h>
 
 #include <asm/virtext.h>
 #include "trace.h"
@@ -175,8 +172,6 @@ struct vcpu_svm {
 	uint64_t sysenter_eip;
 	uint64_t tsc_aux;
 
-	u64 msr_decfg;
-
 	u64 next_rip;
 
 	u64 host_user_msrs[NR_HOST_SAVE_USER_MSRS];
@@ -186,14 +181,6 @@ struct vcpu_svm {
 		u16 ldt;
 		u64 gs_base;
 	} host;
-
-	u64 spec_ctrl;
-	/*
-	 * Contains guest-controlled bits of VIRT_SPEC_CTRL, which will be
-	 * translated into the appropriate L2_CFG bits on the host to
-	 * perform speculative control.
-	 */
-	u64 virt_spec_ctrl;
 
 	u32 *msrpm;
 
@@ -260,8 +247,6 @@ static const struct svm_direct_access_msrs {
 	{ .index = MSR_CSTAR,				.always = true  },
 	{ .index = MSR_SYSCALL_MASK,			.always = true  },
 #endif
-	{ .index = MSR_IA32_SPEC_CTRL,			.always = false },
-	{ .index = MSR_IA32_PRED_CMD,			.always = false },
 	{ .index = MSR_IA32_LASTBRANCHFROMIP,		.always = false },
 	{ .index = MSR_IA32_LASTBRANCHTOIP,		.always = false },
 	{ .index = MSR_IA32_LASTINTFROMIP,		.always = false },
@@ -524,7 +509,6 @@ struct svm_cpu_data {
 	struct kvm_ldttss_desc *tss_desc;
 
 	struct page *save_area;
-	struct vmcb *current_vmcb;
 };
 
 static DEFINE_PER_CPU(struct svm_cpu_data *, svm_data);
@@ -874,25 +858,6 @@ static bool valid_msr_intercept(u32 index)
 			return true;
 
 	return false;
-}
-
-static bool msr_write_intercepted(struct kvm_vcpu *vcpu, unsigned msr)
-{
-	u8 bit_write;
-	unsigned long tmp;
-	u32 offset;
-	u32 *msrpm;
-
-	msrpm = is_guest_mode(vcpu) ? to_svm(vcpu)->nested.msrpm:
-				      to_svm(vcpu)->msrpm;
-
-	offset    = svm_msrpm_offset(msr);
-	bit_write = 2 * (msr & 0x0f) + 1;
-	tmp       = msrpm[offset];
-
-	BUG_ON(offset == MSR_INVALID);
-
-	return !!test_bit(bit_write,  &tmp);
 }
 
 static void set_msr_interception(u32 *msrpm, unsigned msr,
@@ -1333,23 +1298,20 @@ static u64 *avic_get_physical_id_entry(struct kvm_vcpu *vcpu, int index)
 static int avic_init_access_page(struct kvm_vcpu *vcpu)
 {
 	struct kvm *kvm = vcpu->kvm;
-	int ret = 0;
+	int ret;
 
-	mutex_lock(&kvm->slots_lock);
 	if (kvm->arch.apic_access_page_done)
-		goto out;
+		return 0;
 
-	ret = __x86_set_memory_region(kvm,
-				      APIC_ACCESS_PAGE_PRIVATE_MEMSLOT,
-				      APIC_DEFAULT_PHYS_BASE,
-				      PAGE_SIZE);
+	ret = x86_set_memory_region(kvm,
+				    APIC_ACCESS_PAGE_PRIVATE_MEMSLOT,
+				    APIC_DEFAULT_PHYS_BASE,
+				    PAGE_SIZE);
 	if (ret)
-		goto out;
+		return ret;
 
 	kvm->arch.apic_access_page_done = true;
-out:
-	mutex_unlock(&kvm->slots_lock);
-	return ret;
+	return 0;
 }
 
 static int avic_init_backing_page(struct kvm_vcpu *vcpu)
@@ -1572,10 +1534,6 @@ static void svm_vcpu_reset(struct kvm_vcpu *vcpu, bool init_event)
 	u32 dummy;
 	u32 eax = 1;
 
-	vcpu->arch.microcode_version = 0x01000065;
-	svm->spec_ctrl = 0;
-	svm->virt_spec_ctrl = 0;
-
 	if (!init_event) {
 		svm->vcpu.arch.apic_base = APIC_DEFAULT_PHYS_BASE |
 					   MSR_IA32_APICBASE_ENABLE;
@@ -1675,24 +1633,9 @@ out:
 	return ERR_PTR(err);
 }
 
-static void svm_clear_current_vmcb(struct vmcb *vmcb)
-{
-	int i;
-
-	for_each_online_cpu(i)
-		cmpxchg(&per_cpu(svm_data, i)->current_vmcb, vmcb, NULL);
-}
-
 static void svm_free_vcpu(struct kvm_vcpu *vcpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
-
-	/*
-	 * The vmcb page can be recycled, causing a false negative in
-	 * svm_vcpu_load(). So, ensure that no logical CPU has this
-	 * vmcb page recorded as its current vmcb.
-	 */
-	svm_clear_current_vmcb(svm->vmcb);
 
 	__free_page(pfn_to_page(svm->vmcb_pa >> PAGE_SHIFT));
 	__free_pages(virt_to_page(svm->msrpm), MSRPM_ALLOC_ORDER);
@@ -1705,7 +1648,6 @@ static void svm_free_vcpu(struct kvm_vcpu *vcpu)
 static void svm_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 {
 	struct vcpu_svm *svm = to_svm(vcpu);
-	struct svm_cpu_data *sd = per_cpu(svm_data, cpu);
 	int i;
 
 	if (unlikely(cpu != vcpu->cpu)) {
@@ -1734,10 +1676,6 @@ static void svm_vcpu_load(struct kvm_vcpu *vcpu, int cpu)
 	if (static_cpu_has(X86_FEATURE_RDTSCP))
 		wrmsrl(MSR_TSC_AUX, svm->tsc_aux);
 
-	if (sd->current_vmcb != svm->vmcb) {
-		sd->current_vmcb = svm->vmcb;
-		indirect_branch_prediction_barrier();
-	}
 	avic_vcpu_load(vcpu, cpu);
 }
 
@@ -1903,7 +1841,6 @@ static void svm_get_segment(struct kvm_vcpu *vcpu,
 		 */
 		if (var->unusable)
 			var->db = 0;
-		/* This is symmetric with svm_set_segment() */
 		var->dpl = to_svm(vcpu)->vmcb->save.cpl;
 		break;
 	}
@@ -2049,14 +1986,18 @@ static void svm_set_segment(struct kvm_vcpu *vcpu,
 	s->base = var->base;
 	s->limit = var->limit;
 	s->selector = var->selector;
-	s->attrib = (var->type & SVM_SELECTOR_TYPE_MASK);
-	s->attrib |= (var->s & 1) << SVM_SELECTOR_S_SHIFT;
-	s->attrib |= (var->dpl & 3) << SVM_SELECTOR_DPL_SHIFT;
-	s->attrib |= ((var->present & 1) && !var->unusable) << SVM_SELECTOR_P_SHIFT;
-	s->attrib |= (var->avl & 1) << SVM_SELECTOR_AVL_SHIFT;
-	s->attrib |= (var->l & 1) << SVM_SELECTOR_L_SHIFT;
-	s->attrib |= (var->db & 1) << SVM_SELECTOR_DB_SHIFT;
-	s->attrib |= (var->g & 1) << SVM_SELECTOR_G_SHIFT;
+	if (var->unusable)
+		s->attrib = 0;
+	else {
+		s->attrib = (var->type & SVM_SELECTOR_TYPE_MASK);
+		s->attrib |= (var->s & 1) << SVM_SELECTOR_S_SHIFT;
+		s->attrib |= (var->dpl & 3) << SVM_SELECTOR_DPL_SHIFT;
+		s->attrib |= (var->present & 1) << SVM_SELECTOR_P_SHIFT;
+		s->attrib |= (var->avl & 1) << SVM_SELECTOR_AVL_SHIFT;
+		s->attrib |= (var->l & 1) << SVM_SELECTOR_L_SHIFT;
+		s->attrib |= (var->db & 1) << SVM_SELECTOR_DB_SHIFT;
+		s->attrib |= (var->g & 1) << SVM_SELECTOR_G_SHIFT;
+	}
 
 	/*
 	 * This is always accurate, except if SYSRET returned to a segment
@@ -2065,8 +2006,7 @@ static void svm_set_segment(struct kvm_vcpu *vcpu,
 	 * would entail passing the CPL to userspace and back.
 	 */
 	if (seg == VCPU_SREG_SS)
-		/* This is symmetric with svm_get_segment() */
-		svm->vmcb->save.cpl = (var->dpl & 3);
+		svm->vmcb->save.cpl = (s->attrib >> SVM_SELECTOR_DPL_SHIFT) & 3;
 
 	mark_dirty(svm->vmcb, VMCB_SEG);
 }
@@ -2139,8 +2079,6 @@ static int pf_interception(struct vcpu_svm *svm)
 	u64 fault_address = svm->vmcb->control.exit_info_2;
 	u32 error_code;
 	int r = 1;
-
-	svm->vcpu.arch.l1tf_flush_l1d = true;
 
 	switch (svm->apf_reason) {
 	default:
@@ -3503,18 +3441,7 @@ static int cr8_write_interception(struct vcpu_svm *svm)
 
 static int svm_get_msr_feature(struct kvm_msr_entry *msr)
 {
-	msr->data = 0;
-
-	switch (msr->index) {
-	case MSR_F10H_DECFG:
-		if (boot_cpu_has(X86_FEATURE_LFENCE_RDTSC))
-			msr->data |= MSR_F10H_DECFG_LFENCE_SERIALIZE;
-		break;
-	default:
-		return 1;
-	}
-
-	return 0;
+	return 1;
 }
 
 static int svm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
@@ -3585,19 +3512,8 @@ static int svm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 	case MSR_VM_CR:
 		msr_info->data = svm->nested.vm_cr_msr;
 		break;
-	case MSR_IA32_SPEC_CTRL:
-		if (!msr_info->host_initiated &&
-		    !guest_cpuid_has_spec_ctrl(vcpu))
-			return 1;
-
-		msr_info->data = svm->spec_ctrl;
-		break;
-	case MSR_AMD64_VIRT_SPEC_CTRL:
-		if (!msr_info->host_initiated &&
-		    !guest_cpuid_has_virt_ssbd(vcpu))
-			return 1;
-
-		msr_info->data = svm->virt_spec_ctrl;
+	case MSR_IA32_UCODE_REV:
+		msr_info->data = 0x01000065;
 		break;
 	case MSR_F15H_IC_CFG: {
 
@@ -3615,9 +3531,6 @@ static int svm_get_msr(struct kvm_vcpu *vcpu, struct msr_data *msr_info)
 		    (model >= 0x2 && model < 0x20))
 			msr_info->data = 0x1E;
 		}
-		break;
-	case MSR_F10H_DECFG:
-		msr_info->data = svm->msr_decfg;
 		break;
 	default:
 		return kvm_get_msr_common(vcpu, msr_info);
@@ -3690,59 +3603,6 @@ static int svm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
 	case MSR_IA32_TSC:
 		kvm_write_tsc(vcpu, msr);
 		break;
-	case MSR_IA32_SPEC_CTRL:
-		if (!msr->host_initiated &&
-		    !guest_cpuid_has_spec_ctrl(vcpu))
-			return 1;
-
-		/* The STIBP bit doesn't fault even if it's not advertised */
-		if (data & ~(SPEC_CTRL_IBRS | SPEC_CTRL_STIBP))
-			return 1;
-
-		svm->spec_ctrl = data;
-
-		if (!data)
-			break;
-
-		/*
-		 * For non-nested:
-		 * When it's written (to non-zero) for the first time, pass
-		 * it through.
-		 *
-		 * For nested:
-		 * The handling of the MSR bitmap for L2 guests is done in
-		 * nested_svm_vmrun_msrpm.
-		 * We update the L1 MSR bit as well since it will end up
-		 * touching the MSR anyway now.
-		 */
-		set_msr_interception(svm->msrpm, MSR_IA32_SPEC_CTRL, 1, 1);
-		break;
-	case MSR_IA32_PRED_CMD:
-		if (!msr->host_initiated &&
-		    !guest_cpuid_has_ibpb(vcpu))
-			return 1;
-
-		if (data & ~PRED_CMD_IBPB)
-			return 1;
-
-		if (!data)
-			break;
-
-		wrmsrl(MSR_IA32_PRED_CMD, PRED_CMD_IBPB);
-		if (is_guest_mode(vcpu))
-			break;
-		set_msr_interception(svm->msrpm, MSR_IA32_PRED_CMD, 0, 1);
-		break;
-	case MSR_AMD64_VIRT_SPEC_CTRL:
-		if (!msr->host_initiated &&
-		    !guest_cpuid_has_virt_ssbd(vcpu))
-			return 1;
-
-		if (data & ~SPEC_CTRL_SSBD)
-			return 1;
-
-		svm->virt_spec_ctrl = data;
-		break;
 	case MSR_STAR:
 		svm->vmcb->save.star = data;
 		break;
@@ -3807,24 +3667,6 @@ static int svm_set_msr(struct kvm_vcpu *vcpu, struct msr_data *msr)
 	case MSR_VM_IGNNE:
 		vcpu_unimpl(vcpu, "unimplemented wrmsr: 0x%x data 0x%llx\n", ecx, data);
 		break;
-	case MSR_F10H_DECFG: {
-		struct kvm_msr_entry msr_entry;
-
-		msr_entry.index = msr->index;
-		if (svm_get_msr_feature(&msr_entry))
-			return 1;
-
-		/* Check the supported bits */
-		if (data & ~msr_entry.data)
-			return 1;
-
-		/* Don't allow the guest to change a bit, #GP */
-		if (!msr->host_initiated && (data ^ msr_entry.data))
-			return 1;
-
-		svm->msr_decfg = data;
-		break;
-	}
 	case MSR_IA32_APICBASE:
 		if (kvm_vcpu_apicv_active(vcpu))
 			avic_update_vapic_bar(to_svm(vcpu), data);
@@ -4986,14 +4828,6 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 
 	clgi();
 
-	/*
-	 * If this vCPU has touched SPEC_CTRL, restore the guest's value if
-	 * it's non-zero. Since vmentry is serialising on affected CPUs, there
-	 * is no need to worry about the conditional branch over the wrmsr
-	 * being speculatively taken.
-	 */
-	x86_spec_ctrl_set_guest(svm->spec_ctrl, svm->virt_spec_ctrl);
-
 	local_irq_enable();
 
 	asm volatile (
@@ -5040,25 +4874,6 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 		"mov %%r14, %c[r14](%[svm]) \n\t"
 		"mov %%r15, %c[r15](%[svm]) \n\t"
 #endif
-		/*
-		* Clear host registers marked as clobbered to prevent
-		* speculative use.
-		*/
-		"xor %%" _ASM_BX ", %%" _ASM_BX " \n\t"
-		"xor %%" _ASM_CX ", %%" _ASM_CX " \n\t"
-		"xor %%" _ASM_DX ", %%" _ASM_DX " \n\t"
-		"xor %%" _ASM_SI ", %%" _ASM_SI " \n\t"
-		"xor %%" _ASM_DI ", %%" _ASM_DI " \n\t"
-#ifdef CONFIG_X86_64
-		"xor %%r8, %%r8 \n\t"
-		"xor %%r9, %%r9 \n\t"
-		"xor %%r10, %%r10 \n\t"
-		"xor %%r11, %%r11 \n\t"
-		"xor %%r12, %%r12 \n\t"
-		"xor %%r13, %%r13 \n\t"
-		"xor %%r14, %%r14 \n\t"
-		"xor %%r15, %%r15 \n\t"
-#endif
 		"pop %%" _ASM_BP
 		:
 		: [svm]"a"(svm),
@@ -5088,9 +4903,6 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 #endif
 		);
 
-	/* Eliminate branch target predictions from guest mode */
-	vmexit_fill_RSB();
-
 #ifdef CONFIG_X86_64
 	wrmsrl(MSR_GS_BASE, svm->host.gs_base);
 #else
@@ -5100,29 +4912,9 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 #endif
 #endif
 
-	/*
-	 * We do not use IBRS in the kernel. If this vCPU has used the
-	 * SPEC_CTRL MSR it may have left it on; save the value and
-	 * turn it off. This is much more efficient than blindly adding
-	 * it to the atomic save/restore list. Especially as the former
-	 * (Saving guest MSRs on vmexit) doesn't even exist in KVM.
-	 *
-	 * For non-nested case:
-	 * If the L01 MSR bitmap does not intercept the MSR, then we need to
-	 * save it.
-	 *
-	 * For nested case:
-	 * If the L02 MSR bitmap does not intercept the MSR, then we need to
-	 * save it.
-	 */
-	if (unlikely(!msr_write_intercepted(vcpu, MSR_IA32_SPEC_CTRL)))
-		svm->spec_ctrl = native_read_msr(MSR_IA32_SPEC_CTRL);
-
 	reload_tss(vcpu);
 
 	local_irq_disable();
-
-	x86_spec_ctrl_restore_host(svm->spec_ctrl, svm->virt_spec_ctrl);
 
 	vcpu->arch.cr2 = svm->vmcb->save.cr2;
 	vcpu->arch.regs[VCPU_REGS_RAX] = svm->vmcb->save.rax;
@@ -5164,7 +4956,6 @@ static void svm_vcpu_run(struct kvm_vcpu *vcpu)
 
 	mark_all_clean(svm->vmcb);
 }
-STACK_FRAME_NON_STANDARD(svm_vcpu_run);
 
 static void svm_set_cr3(struct kvm_vcpu *vcpu, unsigned long root)
 {
@@ -5221,7 +5012,7 @@ static bool svm_cpu_has_accelerated_tpr(void)
 	return false;
 }
 
-static bool svm_has_emulated_msr(int index)
+static bool svm_has_high_real_mode_segbase(void)
 {
 	return true;
 }
@@ -5523,12 +5314,6 @@ static inline void avic_post_state_restore(struct kvm_vcpu *vcpu)
 	avic_handle_ldr_update(vcpu);
 }
 
-static void svm_setup_mce(struct kvm_vcpu *vcpu)
-{
-	/* [63:9] are reserved. */
-	vcpu->arch.mcg_cap &= 0x1ff;
-}
-
 static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 	.cpu_has_kvm_support = has_svm,
 	.disabled_by_bios = is_disabled,
@@ -5538,7 +5323,7 @@ static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 	.hardware_enable = svm_hardware_enable,
 	.hardware_disable = svm_hardware_disable,
 	.cpu_has_accelerated_tpr = svm_cpu_has_accelerated_tpr,
-	.has_emulated_msr = svm_has_emulated_msr,
+	.cpu_has_high_real_mode_segbase = svm_has_high_real_mode_segbase,
 
 	.vcpu_create = svm_create_vcpu,
 	.vcpu_free = svm_free_vcpu,
@@ -5645,7 +5430,6 @@ static struct kvm_x86_ops svm_x86_ops __ro_after_init = {
 	.pmu_ops = &amd_pmu_ops,
 	.deliver_posted_interrupt = svm_deliver_avic_intr,
 	.update_pi_irte = svm_update_pi_irte,
-	.setup_mce = svm_setup_mce,
 };
 
 static int __init svm_init(void)

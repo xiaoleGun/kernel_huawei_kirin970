@@ -387,7 +387,7 @@ static ssize_t synth_store(struct kobject *kobj, struct kobj_attribute *attr,
 	len = strlen(buf);
 	if (len < 2 || len > 9)
 		return -EINVAL;
-	memcpy(new_synth_name, buf, len);
+	strncpy(new_synth_name, buf, len);
 	if (new_synth_name[len - 1] == '\n')
 		len--;
 	new_synth_name[len] = '\0';
@@ -517,7 +517,7 @@ static ssize_t punc_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return -EINVAL;
 	}
 
-	memcpy(punc_buf, buf, x);
+	strncpy(punc_buf, buf, x);
 
 	while (x && punc_buf[x - 1] == '\n')
 		x--;
@@ -834,9 +834,7 @@ static ssize_t message_show(struct kobject *kobj,
 	struct msg_group_t *group = spk_find_msg_group(attr->attr.name);
 	unsigned long flags;
 
-	if (WARN_ON(!group))
-		return -EINVAL;
-
+	BUG_ON(!group);
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
 	retval = message_show_helper(buf, group->start, group->end);
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
@@ -848,9 +846,7 @@ static ssize_t message_store(struct kobject *kobj, struct kobj_attribute *attr,
 {
 	struct msg_group_t *group = spk_find_msg_group(attr->attr.name);
 
-	if (WARN_ON(!group))
-		return -EINVAL;
-
+	BUG_ON(!group);
 	return message_store_helper(buf, count, group);
 }
 

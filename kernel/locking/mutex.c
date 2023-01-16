@@ -56,6 +56,9 @@ __mutex_init(struct mutex *lock, const char *name, struct lock_class_key *key)
 #ifdef CONFIG_MUTEX_SPIN_ON_OWNER
 	osq_lock_init(&lock->osq);
 #endif
+#ifdef CONFIG_HW_VIP_THREAD
+	lock->vip_dep_task = NULL;
+#endif
 
 	debug_mutex_init(lock, name, key);
 }
@@ -540,7 +543,11 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 	debug_mutex_add_waiter(lock, &waiter, task);
 
 	/* add waiting tasks to the end of the waitqueue (FIFO): */
-	list_add_tail(&waiter.list, &lock->wait_list);
+#ifdef CONFIG_HW_VIP_THREAD
+	mutex_list_add(task, &waiter.list, &lock->wait_list, lock);
+#else
+ 	list_add_tail(&waiter.list, &lock->wait_list);
+#endif
 	waiter.task = task;
 
 	lock_contended(&lock->dep_map, ip);
@@ -574,6 +581,14 @@ __mutex_lock_common(struct mutex *lock, long state, unsigned int subclass,
 			if (ret)
 				goto err;
 		}
+
+#ifdef CONFIG_HW_VIP_THREAD
+		mutex_dynamic_vip_enqueue(lock, task);
+#endif
+#ifdef CONFIG_HW_QOS_THREAD
+		dynamic_qos_enqueue(READ_ONCE(lock->owner),
+			task, DYNAMIC_QOS_MUTEX);
+#endif
 
 		__set_task_state(task, state);
 
@@ -739,6 +754,13 @@ __mutex_unlock_common_slowpath(struct mutex *lock, int nested)
 	spin_lock_mutex(&lock->wait_lock, flags);
 	mutex_release(&lock->dep_map, nested, _RET_IP_);
 	debug_mutex_unlock(lock);
+
+#ifdef CONFIG_HW_VIP_THREAD
+	mutex_dynamic_vip_dequeue(lock, current);
+#endif
+#ifdef CONFIG_HW_QOS_THREAD
+	dynamic_qos_dequeue(current, DYNAMIC_QOS_MUTEX);
+#endif
 
 	if (!list_empty(&lock->wait_list)) {
 		/* get the first entry from the wait-list: */

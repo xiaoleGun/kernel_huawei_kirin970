@@ -28,7 +28,9 @@
 #include <net/sock.h>
 #include <net/tcp.h>
 #include <net/udp.h>
-
+#ifdef CONFIG_HUAWEI_BASTET
+#include <huawei_platform/net/bastet/bastet.h>
+#endif
 #if defined(CONFIG_IP6_NF_IPTABLES) || defined(CONFIG_IP6_NF_IPTABLES_MODULE)
 #include <linux/netfilter_ipv6/ip6_tables.h>
 #endif
@@ -38,13 +40,21 @@
 #include "xt_qtaguid_print.h"
 #include "../../fs/proc/internal.h"
 
+#ifdef CONFIG_HW_WIFIPRO
+#include <linux/snmp.h>
+extern void wifipro_update_tcp_statistics(int mib_type, const struct sk_buff *skb, struct sock *from_sk);
+#endif
+
+#ifdef CONFIG_HW_QTAGUID_PID
+#include <huawei_platform/net/qtaguid_pid/qtaguid_pid.h>
+#endif
+
 /*
  * We only use the xt_socket funcs within a similar context to avoid unexpected
  * return values.
  */
 #define XT_SOCKET_SUPPORTED_HOOKS \
 	((1 << NF_INET_PRE_ROUTING) | (1 << NF_INET_LOCAL_IN))
-
 
 static const char *module_procdirname = "xt_qtaguid";
 static struct proc_dir_entry *xt_qtaguid_procdir;
@@ -55,6 +65,10 @@ module_param_named(iface_perms, proc_iface_perms, uint, S_IRUGO | S_IWUSR);
 static struct proc_dir_entry *xt_qtaguid_stats_file;
 static unsigned int proc_stats_perms = S_IRUGO;
 module_param_named(stats_perms, proc_stats_perms, uint, S_IRUGO | S_IWUSR);
+
+#ifdef CONFIG_HW_QTAGUID_PID
+static struct proc_dir_entry *xt_qtaguid_pid_stats_file;
+#endif
 
 static struct proc_dir_entry *xt_qtaguid_ctrl_file;
 
@@ -713,6 +727,10 @@ static void *iface_stat_fmt_proc_start(struct seq_file *m, loff_t *pos)
 	 * This lock will prevent iface_stat_update() from changing active,
 	 * and in turn prevent an interface from unregistering itself.
 	 */
+#ifdef CONFIG_HUAWEI_BASTET
+	bastet_wait_traffic_flow();
+#endif
+
 	spin_lock_bh(&iface_stat_list_lock);
 
 	if (unlikely(module_passive))
@@ -1221,6 +1239,12 @@ static void iface_stat_update_from_skb(const struct sk_buff *skb,
 		 par->hooknum, __func__, el_dev->name, el_dev->type,
 		 par->family, proto, direction);
 
+#ifdef CONFIG_HW_WIFIPRO
+        if(direction == IFS_TX){
+                wifipro_update_tcp_statistics(WIFIPRO_TCP_MIB_OUTSEGS, skb, NULL);
+        }
+#endif
+
 	spin_lock_bh(&iface_stat_list_lock);
 	entry = get_iface_entry(el_dev->name);
 	if (entry == NULL) {
@@ -1376,6 +1400,58 @@ unlock:
 	spin_unlock_bh(&iface_stat_list_lock);
 }
 
+#ifdef CONFIG_HUAWEI_BASTET
+void bastet_update_if_tag_stat(const char *ifname, uid_t uid,
+					const struct sock *sk,
+					enum ifs_tx_rx direction,
+					int proto, int bytes)
+{
+	if (NULL == ifname) {
+		pr_err("bastet_update_if_tag_stat ifname error\n");
+		return;
+	}
+
+	if_tag_stat_update(ifname, uid, sk, direction, proto, bytes);
+
+#ifdef CONFIG_HW_QTAGUID_PID
+	if_pid_stat_update(ifname, uid, sk, NULL,
+		get_active_counter_set(make_tag_from_uid(uid)),
+		NFPROTO_IPV4,
+		direction,
+		proto, bytes);
+#endif
+}
+
+int bastet_update_total_bytes(const char *dev_name, int proto,
+				unsigned long tx_bytes, unsigned long rx_bytes)
+{
+	int cnt_set = 0;
+	struct data_counters *cnts = NULL;
+	struct iface_stat *entry = NULL;
+
+	spin_lock_bh(&iface_stat_list_lock);
+	entry = get_iface_entry(dev_name);
+	if (!entry) {
+		spin_unlock_bh(&iface_stat_list_lock);
+		return -EINVAL;
+	}
+
+	cnts = &entry->totals_via_skb;
+	cnts->bpc[cnt_set][IFS_TX][proto].bytes += tx_bytes;
+	cnts->bpc[cnt_set][IFS_RX][proto].bytes += rx_bytes;
+
+	entry->totals_via_dev[IFS_TX].bytes += tx_bytes;
+	entry->totals_via_dev[IFS_RX].bytes += rx_bytes;
+
+	entry->last_known[IFS_TX].bytes += tx_bytes;
+	entry->last_known[IFS_RX].bytes += rx_bytes;
+
+	spin_unlock_bh(&iface_stat_list_lock);
+
+	return 0;
+}
+#endif
+
 static int iface_netdev_event_handler(struct notifier_block *nb,
 				      unsigned long event, void *ptr) {
 	struct net_device *dev = netdev_notifier_info_to_dev(ptr);
@@ -1390,6 +1466,9 @@ static int iface_netdev_event_handler(struct notifier_block *nb,
 	switch (event) {
 	case NETDEV_UP:
 		iface_stat_create(dev, NULL);
+#ifdef CONFIG_HW_QTAGUID_PID
+		iface_pid_stat_create(dev, NULL);
+#endif
 		atomic64_inc(&qtu_events.iface_events);
 		break;
 	case NETDEV_DOWN:
@@ -1419,6 +1498,9 @@ static int iface_inet6addr_event_handler(struct notifier_block *nb,
 		BUG_ON(!ifa || !ifa->idev);
 		dev = (struct net_device *)ifa->idev->dev;
 		iface_stat_create_ipv6(dev, ifa);
+#ifdef CONFIG_HW_QTAGUID_PID
+		iface_pid_stat_create_ipv6(dev, ifa);
+#endif
 		atomic64_inc(&qtu_events.iface_events);
 		break;
 	case NETDEV_DOWN:
@@ -1450,6 +1532,9 @@ static int iface_inetaddr_event_handler(struct notifier_block *nb,
 		BUG_ON(!ifa || !ifa->ifa_dev);
 		dev = ifa->ifa_dev->dev;
 		iface_stat_create(dev, ifa);
+#ifdef CONFIG_HW_QTAGUID_PID
+		iface_pid_stat_create(dev, ifa);
+#endif
 		atomic64_inc(&qtu_events.iface_events);
 		break;
 	case NETDEV_DOWN:
@@ -1617,6 +1702,7 @@ static void account_for_uid(const struct sk_buff *skb,
 
 	get_dev_and_dir(skb, par, &direction, &el_dev);
 	proto = ipx_proto(skb, par);
+
 	MT_DEBUG("qtaguid[%d]: dev name=%s type=%d fam=%d proto=%d dir=%d\n",
 		 par->hooknum, el_dev->name, el_dev->type,
 		 par->family, proto, direction);
@@ -1625,6 +1711,16 @@ static void account_for_uid(const struct sk_buff *skb,
 			   skb->sk ? skb->sk : alternate_sk,
 			   direction,
 			   proto, skb->len);
+
+#ifdef CONFIG_HW_QTAGUID_PID
+	if_pid_stat_update(el_dev->name, uid,
+			skb->sk ? skb->sk : alternate_sk,
+			skb,
+			get_active_counter_set(make_tag_from_uid(uid)),
+			par->family,
+			direction,
+			proto, skb->len);
+#endif
 }
 
 static bool qtaguid_mt(const struct sk_buff *skb, struct xt_action_param *par)
@@ -1779,7 +1875,21 @@ static bool qtaguid_mt(const struct sk_buff *skb, struct xt_action_param *par)
 			res = false;
 			goto put_sock_ret_res;
 		}
+		//Thus (!a && b) || (a && !b) == a ^ b
+	} else if (info->match & XT_QTAGUID_PID) {
+		if ((sk->sk_socket == NULL)) {
+			res = false;
+			goto put_sock_ret_res;
+		}
+
+		if (((sk->sk_socket->pid >= info->xt_pid_min) && (sk->sk_socket->pid <= info->xt_pid_max)) ^ !(info->invert & XT_QTAGUID_PID)) {
+			MT_DEBUG("qtaguid-PID XT_QTAGUID_PID[%d]: leaving Pid not matching\n",
+				par->hooknum);
+			res = false;
+			goto put_sock_ret_res;
+		}
 	}
+
 	MT_DEBUG("qtaguid[%d]: leaving matched\n", par->hooknum);
 	res = true;
 
@@ -2656,6 +2766,10 @@ static void *qtaguid_stats_proc_start(struct seq_file *m, loff_t *pos)
 	struct proc_print_info *ppi = m->private;
 	struct tag_stat *ts_entry = NULL;
 
+#ifdef CONFIG_HUAWEI_BASTET
+	bastet_wait_traffic_flow();
+#endif
+
 	spin_lock_bh(&iface_stat_list_lock);
 
 	if (*pos == 0) {
@@ -2968,6 +3082,20 @@ static int __init qtaguid_proc_register(struct proc_dir_entry **res_procdir)
 		ret = -ENOMEM;
 		goto no_stats_entry;
 	}
+
+#ifdef CONFIG_HW_QTAGUID_PID
+	xt_qtaguid_pid_stats_file = proc_create_data("stats_pid", proc_stats_perms,
+						 *res_procdir,
+						 &proc_qtaguid_pid_stats_fops,
+						 NULL);
+	if (!xt_qtaguid_pid_stats_file) {
+		pr_err("qtaguid: failed to create xt_qtaguid/stats_pid "
+			"file\n");
+		ret = -ENOMEM;
+		goto no_stats_entry;
+	}
+#endif
+
 	/*
 	 * TODO: add support counter hacking
 	 * xt_qtaguid_stats_file->write_proc = qtaguid_stats_proc_write;
